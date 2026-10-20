@@ -1,0 +1,13 @@
+bin/
+obj/
+*.user
+.vs/
+.vscode/
+*.swp
+TestResults/
+# runtime data never belongs in the repo (spec §4, §8)
+history/
+sessions/
+*.pem
+*.pfx
+secrets.env
