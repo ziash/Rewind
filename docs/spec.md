@@ -4,8 +4,8 @@
 
 | Item | Value |
 |---|---|
-| Status | **Spec draft** — nothing built yet; build steps in §11, each on the owner's go |
-| Document version | v0.1 (20-Oct-2026) — history in §15 |
+| Status | **Step 1 built** (history downloader, 20-Oct-2026); full 24-month download running; steps 2–5 not started (§11) |
+| Document version | v0.2 (20-Oct-2026) — history in §15 |
 | Owner | Zeeshan |
 | Repository | [github.com/ziash/Rewind](https://github.com/ziash/Rewind) (private) — separate from [Trader](https://github.com/ziash/Trader) |
 | Runs on | The Ubuntu laptop; browser GUI at `http://localhost:5180`; the broker side at `localhost:5036` |
@@ -66,21 +66,22 @@ Rewind's own downloader, **`rewind-download`** (a small C# console program in th
 
 | Item | Value |
 |---|---|
-| Source | Dukascopy data feed, one compressed file per symbol, side and day: `https://datafeed.dukascopy.com/datafeed/<SYMBOL>/<yyyy>/<MM-1>/<dd>/<BID\|ASK>_candles_min_1.bi5` (month counted from 00) — **to be confirmed in step 1** |
+| Source | Dukascopy data feed, one compressed file per symbol, side and day: `https://datafeed.dukascopy.com/datafeed/<SYMBOL>/<yyyy>/<MM-1>/<dd>/<BID\|ASK>_candles_min_1.bi5` — month counted from 00 (confirmed: `2026/09/12` is Monday 12-Oct-2026). HTTPS only (plain HTTP is redirected to it) |
 | Why M1 files | The feed offers 1-minute, 1-hour and 1-day candle files, not 5-minute ones; M5 and larger are built from M1. Keeping the M1 files costs nothing extra and allows a more exact replay later (§6.3) |
-| Format of a file | LZMA-compressed (the 7-Zip method); inside, one 24-byte record per minute: seconds since midnight UTC, open, close, low, high (whole numbers, divided by a per-symbol factor), volume. Decoded by a public-domain LZMA decoder copied into the repo — **record layout and price factors checked in step 1** against prices seen in cTrader |
-| Symbols | AUDJPY, EURGBP, EURUSD, GBPJPY, BTCUSD, ETHUSD (Dukascopy's names; checked in step 1) |
+| Format of a file | LZMA-compressed (the 7-Zip method, "lzma alone": 5 property bytes, 8 bytes size, data); inside, 1,440 records of 24 bytes, big-endian: seconds since 00:00 UTC, **open, close, low, high** (whole numbers = price × factor), volume (float). Decoded with the SharpCompress library (MIT licence, NuGet). Price factors: 100,000 (EURUSD, EURGBP), 1,000 (AUDJPY, GBPJPY), 10 (BTCUSD, ETHUSD) — checked against IC Markets' H1 candles of 14-Oct-2026: all six within 0.06 % |
+| Symbols | AUDJPY, EURGBP, EURUSD, GBPJPY, BTCUSD, ETHUSD (Dukascopy uses the same names). Forex Saturdays are not downloaded (market closed) |
 | Period | 24 months back from the last complete day (first run: 1-Oct-2024 → 19-Oct-2026); re-running adds the missing days |
-| Amount | ≈ 6 symbols × 2 sides × 730 days ≈ 8,800 small files, roughly 100 MB to download |
-| Politeness | At most 4 downloads at a time, retry with growing waits, already-downloaded days skipped (resume after an interruption) |
-| Clean-up | Minutes with no trading (volume 0 and price unchanged, e.g. forex weekends) are dropped; gaps are kept as gaps |
+| Amount | 8,120 files of about 11–15 KB (≈ 100 MB) for 1-Oct-2024 → 19-Oct-2026 |
+| Politeness | **One download at a time**, at least 1 s apart (about 2.3 s per file in practice → about 5 hours for the full history). Dukascopy answers "429 Too Many Requests" to bursts (seen while testing); then the downloader waits (the server's Retry-After, else 1 min, doubling up to 15 min, 8 tries). Every file is kept in a raw cache (`~/rewind/history/raw/`), so a re-run never fetches a file twice and resumes after an interruption |
+| Clean-up | Minutes in which neither side traded (volume 0) are dropped; gaps are kept as gaps. A file whose records do not fit together (low above open/close, etc.) is refused and not kept |
 | Output | `~/rewind/history/<SYMBOL>/<yyyy-MM>.m1.csv.gz` (compressed) and `<yyyy-MM>.m5.csv` — one file per month |
-| CSV columns | `time_utc, bid_open, bid_high, bid_low, bid_close, ask_open, ask_high, ask_low, ask_close, volume` — same CSV rules as the Trader project (UTF-8, `.` decimals, UTC times as `yyyy-MM-dd HH:mm:ss`, opens in Google Sheets) |
-| Check | After each run: a summary per symbol (days, candles, gaps over 1 hour on weekdays, smallest / median / largest spread) |
+| CSV columns | `time_utc, bid_open, bid_high, bid_low, bid_close, ask_open, ask_high, ask_low, ask_close, volume` (volume = the bid side's, in Dukascopy's units) — same CSV rules as the Trader project (UTF-8, `.` decimals, UTC times as `yyyy-MM-dd HH:mm:ss`, opens in Google Sheets) |
+| Check | After each run: a summary per symbol (days, candles, price range, gaps over 1 hour — for forex outside the weekend close —, spread at close: smallest / median / 99 % / largest). Exit code 1 if days are missing |
+| Run | `rewind-download` (all), `--from` / `--to` / `--symbols` for a part, `--build-only` to rebuild the CSV files from the cache, `--interval-ms` for the pause. Code: `src/Rewind.Download`; tests: `tests/Rewind.Download.Tests` (two real day files as samples) |
 
 Things to know:
 - Dukascopy's prices are **very close to, not identical with**, IC Markets' or Pepperstone's — fine for practising and for testing TM's behaviour. Their spreads also differ; Rewind can instead use **fixed spreads per symbol** (e.g. the medians the Audit Bot measured) — decision in §13.
-- Dukascopy's terms of use for the data feed are to be read before the first full download (§13).
+- **Personal use only:** the downloaded history is never committed to Git or shared (`.gitignore` excludes it). Dukascopy's own terms for the feed could not be found online yet (§13).
 - The download is the **only** time Rewind talks to the internet.
 
 ## 5. The chart (browser GUI)
@@ -192,7 +193,7 @@ Each step on the owner's go, each tested before the next.
 
 | Step | Content | Test |
 |---|---|---|
-| 1 | `rewind-download`: Dukascopy files → monthly M1 / M5 CSV for the six symbols; summary | Prices of a few days compared with TradingView / cTrader by the owner; gap and spread summary looks sane |
+| 1 | `rewind-download`: Dukascopy files → monthly M1 / M5 CSV for the six symbols; summary | **Built 20-Oct-2026** — 8 tests; trial week of EURUSD complete (7,186 minutes, no gaps); prices within 0.06 % of IC Markets' for all six symbols; full download running (log in `~/rewind/logs/`). Owner to glance at a few days in Google Sheets |
 | 2 | Chart in the browser: timeframes, scroll, go to, replay cursor, step / play, levels | Owner replays a known week |
 | 3 | Simulated broker + order panel: manual trades, SL/TP, P/L, commission, sessions, `trades.csv` | Hand-checked trades (fill prices, stop hits, gaps) |
 | 4 | Open API server + certificate; Trader-side T1–T3 (in the Trader repo) | `Trader.ListAccounts` and then TM connect to Rewind; TM takes over a manual trade, hedges fill and re-hedge on replayed prices |
@@ -207,7 +208,7 @@ Each step on the owner's go, each tested before the next.
 | Web server | ASP.NET Core (built into .NET); the browser and Rewind talk over a WebSocket (a connection that stays open for live updates) |
 | Browser page | Plain HTML / JavaScript + Lightweight Charts (copied into the repo, fixed version) — no build tools |
 | Open API side | `TcpListener` + `SslStream` (built into .NET); certificate made once by Rewind, for `localhost`, stored in `~/rewind/certs/` |
-| Compression | Public-domain LZMA decoder (from the 7-Zip LZMA SDK) for the downloader |
+| Compression | SharpCompress (MIT licence, NuGet) for LZMA — simpler than copying the 7-Zip LZMA SDK |
 | Logging | Serilog, UTC times |
 | Tests | xUnit: decoder, M1 → M5, fills and gaps, stop rules, clock translation, message handling |
 
@@ -216,7 +217,7 @@ Each step on the owner's go, each tested before the next.
 - **Spreads:** Dukascopy's own spreads, or fixed per-symbol spreads from the Audit Bot's measurements (closer to the owner's brokers)?
 - **Commission:** exact IC Markets Raw values per symbol (forex and crypto).
 - **USD conversion** of JPY and GBP profits: download USDJPY and GBPUSD as well (two more symbols, conversion only), or a fixed rate per session?
-- **Dukascopy's terms of use** for the data feed — read before the first full download.
+- **Dukascopy's terms of use** for the data feed: not found online; third parties speak of personal use. Rewind keeps the data private (never in Git); ask Dukascopy if it is ever to be shared.
 - **News pop-ups in replay:** TM's news / Friday pop-ups follow the real clock. Rewind could show its own news markers on the chart from Trader's `news-releases.json` (copied) instead.
 - **D1 candle boundaries:** 00:00 UTC, or 17:00 New York as many brokers draw them? Compare with cTrader in step 2.
 - **More precise replay:** use the M1 files as the price path (20 steps per M5 bar) — when the 4-step guess proves too rough.
@@ -233,3 +234,4 @@ Each step on the owner's go, each tested before the next.
 | Version | Date | Change |
 |---|---|---|
 | v0.1 | 20 Oct 2026 | First draft. Owner's choices: browser app; six symbols; 24 months; 5-minute candles to start; TM runs unchanged on Ubuntu and connects to Rewind like a broker; history downloaded (Dukascopy) by Rewind's own downloader (option c); a completely separate project and repository, copying rather than sharing code with Trader |
+| v0.2 | 20 Oct 2026 | Step 1 built: `rewind-download`. Confirmed file format, URL (month from 00) and price factors (checked against IC Markets). Changed: one download at a time (Dukascopy throttles bursts with HTTP 429), HTTPS only, forex Saturdays skipped, SharpCompress instead of a copied LZMA decoder; history is personal use only |
