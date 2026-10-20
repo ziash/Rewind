@@ -29,7 +29,7 @@ dotnet src/Rewind.Download/bin/Release/net10.0/rewind-download.dll            # 
 dotnet src/Rewind.Download/bin/Release/net10.0/rewind-download.dll --help
 ```
 
-Output: `~/rewind/history/<SYMBOL>/<yyyy-MM>.m5.csv` (and `.m1.csv.gz`), opens in Google Sheets. Personal use only — never committed.
+Output: `~/rewind/history/<SYMBOL>/<yyyy-MM>.m5.csv` (and `.m1.csv.gz`), opens in Google Sheets. Personal use only — never committed (except two small test sample files).
 
 ## Build steps
 

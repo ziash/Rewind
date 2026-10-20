@@ -81,7 +81,7 @@ Rewind's own downloader, **`rewind-download`** (a small C# console program in th
 
 Things to know:
 - Dukascopy's prices are **very close to, not identical with**, IC Markets' or Pepperstone's — fine for practising and for testing TM's behaviour. Their spreads also differ; Rewind can instead use **fixed spreads per symbol** (e.g. the medians the Audit Bot measured) — decision in §13.
-- **Personal use only:** the downloaded history is never committed to Git or shared (`.gitignore` excludes it). Dukascopy's own terms for the feed could not be found online yet (§13).
+- **Personal use only:** the downloaded history is never committed to Git or shared (`.gitignore` excludes it) — the only exception is two EURUSD day files (22 KB) kept as test samples in this private repository. Dukascopy's own terms for the feed could not be found online yet (§13).
 - The download is the **only** time Rewind talks to the internet.
 
 ## 5. The chart (browser GUI)
