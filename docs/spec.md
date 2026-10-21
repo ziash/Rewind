@@ -4,8 +4,8 @@
 
 | Item | Value |
 |---|---|
-| Status | **Steps 1–3 built** (history downloader 20-Oct-2026; chart and simulated broker 21-Oct-2026); steps 4–5 not started (§11) |
-| Document version | v0.4 (21-Oct-2026) — history in §15 |
+| Status | **Steps 1–4 built** (history downloader 20-Oct-2026; chart, simulated broker and TM connection 21-Oct-2026); step 5 not started (§11) |
+| Document version | v0.5 (21-Oct-2026) — history in §15 |
 | Owner | Zeeshan |
 | Repository | [github.com/ziash/Rewind](https://github.com/ziash/Rewind) (private) — separate from [Trader](https://github.com/ziash/Trader) |
 | Runs on | The Ubuntu laptop; browser GUI at `http://localhost:5180`; the broker side at `localhost:5036` |
@@ -154,24 +154,26 @@ A 5-minute candle only gives open, high, low, close. Rewind walks each M5 bar th
 
 ## 9. TM's side
 
-TM's **code is not changed**. Three small, opt-in changes are needed in the **Trader** project's shared code (`Trader.Core`, Open Code Pieces), done there as a separate step on the owner's go and recorded in Trader's documents; with none of them switched on, every Trader bot works exactly as today:
+TM's **code is not changed**. Three small, opt-in changes were planned in the **Trader** project's shared code (`Trader.Core`, Open Code Pieces); with none of them switched on, every Trader bot works exactly as before. **Outcome (21-Oct-2026, Trader commit 8200a9d, open-code-pieces v1.2):** T1 built; T2 already existed; T3 needs no code.
 
 | # | Change in Trader.Core | Why |
 |---|---|---|
-| T1 | A third environment **`replay`**: host and port taken from the secrets file, **only `localhost` / `127.0.0.1` accepted**. `demo` stays the default; `live` stays refused | TM must connect to Rewind instead of `demo.ctraderapi.com` |
-| T2 | Choose the secrets file with an environment variable (e.g. `TRADER_SECRETS_FILE`); default stays `~/.config/trader/secrets.env` | TM-for-Rewind must never read or rewrite the real tokens, which the running Audit Bot uses |
-| T3 | Trust Rewind's own certificate | The cTrader library always encrypts (TLS) and accepts only certificates the system trusts. First choice, **no code**: start TM with `SSL_CERT_FILE` pointing at a file with the system's certificates plus Rewind's (to be verified that .NET on Linux honours it); fallback: T1 accepts exactly Rewind's certificate (pinned) for `replay` only |
+| T1 | A third environment **`replay`**: `CTRADER_HOST` / `CTRADER_PORT` from the secrets file, **only `localhost` / `127.0.0.1` / `::1` accepted** (checked when reading the file and again when connecting); refused with `demo`; `live` stays refused | TM must connect to Rewind instead of `demo.ctraderapi.com` — **built**, 9 tests |
+| T2 | Choose the secrets file with `TRADER_SECRETS_FILE`; default stays `~/.config/trader/secrets.env` | TM-for-Rewind must never read or rewrite the real tokens — **already in Trader** (since Phase 1) |
+| T3 | Trust Rewind's own certificate | The cTrader library always encrypts (TLS) and accepts only certificates the system trusts. **No code:** TM is started with `SSL_CERT_FILE` = `~/rewind/certs/bundle.pem` (the system's certificates plus Rewind's local authority); .NET on Linux honours it — **confirmed** |
 
-On the Rewind side, for TM:
-- `~/rewind/tm/secrets.env` — `CTRADER_ENV=replay`, host, port, and **fake** client ID, secret and tokens (Rewind accepts these only; they are worthless anywhere else). Rewind answers token refreshes with new fake tokens, which TM writes back into *this* file.
-- `~/rewind/tm/tm.json` — TM's config for Rewind: the Rewind account and the six symbols, same rule values as on demo.
+On the Rewind side, for TM (made by Rewind on its first start; never overwritten):
+- `~/rewind/tm/secrets.env` (mode 600) — `CTRADER_ENV=replay`, `CTRADER_HOST=localhost`, `CTRADER_PORT=5036`, and **fake** client ID, secret and tokens. Rewind checks the client ID and secret, and accepts any token it could have issued (`rewind-…`); they are worthless anywhere else. Rewind answers token refreshes with new fake tokens, which TM writes back into *this* file.
+- `~/rewind/tm/tm.json` — TM's config for Rewind: the account **9000001** (broker name `rewind`) and the symbols with history; TM's rule values stay at their defaults (copy any you want to change in here).
+- `~/rewind/tm/run-tm.sh` — sets `TRADER_SECRETS_FILE` and `SSL_CERT_FILE` and starts TM from `~/code/Trader` (`TRADER_REPO` overrides) with `--config-dir ~/rewind/tm`.
+- `~/rewind/certs/` — `server.pfx` (Rewind's certificate for localhost, mode 600), `ca.pem` (Rewind's local authority; its private key is never stored), `bundle.pem` (system certificates + `ca.pem`).
+- The header of the page shows **TM on / TM off** (a TM connected to the Open API).
 - TM's state and logs then land in `~/tradebot/run/tm/rewind-<account>.json` and `~/tradebot/logs/rewind/…` — kept apart from the demo accounts by the broker name `rewind`.
 
-Start (after T1–T3):
+Start (Rewind running first):
 
 ```bash
-TRADER_SECRETS_FILE=~/rewind/tm/secrets.env SSL_CERT_FILE=~/rewind/certs/bundle.pem \
-  dotnet run --project ~/code/Trader/src/Trader.TM -- --config-dir ~/rewind/tm
+~/rewind/tm/run-tm.sh
 ```
 
 The TM service on the demo accounts can keep running at the same time: different account, different secrets, different state file.
@@ -190,6 +192,14 @@ Rewind answers the part of cTrader's Open API that TM uses (Protobuf messages ov
 
 Behaviour is copied from what the Trader project saw live (e.g. the event order for a market order: accepted, then filled with the deal). Anything TM sends that Rewind does not support is answered with an error and logged, so gaps are visible at once.
 
+As built (step 4, `src/Rewind/OpenApi`):
+- Listens on **127.0.0.1:5036 only**, TLS with Rewind's certificate; heartbeat every 10 s; one account, ID 9000001, hedged, USD, balance from the session.
+- Symbol IDs 1–6 in the order of `config/symbols.json` (only those with history); asset IDs USD 1, EUR 2, GBP 3, JPY 4, AUD 5, BTC 6, ETH 7.
+- A request's results go back under its clientMsgId: market order → ORDER_ACCEPTED + ORDER_FILLED (order, position, deal); stop order → ORDER_ACCEPTED; amend → ORDER_REPLACED; cancel → ORDER_CANCELLED; SL/TP → ORDER_REPLACED with the position; close → ORDER_ACCEPTED + ORDER_FILLED with the deal's close details. A relative stop-loss / take-profit on a market order is placed at that distance from the fill price. Refusals → `ProtoOAOrderErrorEvent` with the code (e.g. `TRADING_BAD_STOPS`).
+- Everything else that happens — the owner's clicks in the browser, stop orders, stop-losses and take-profits filled while the replay moves — goes to every connected TM as unsolicited execution events (stop-loss / take-profit closes as `STOP_LOSS_TAKE_PROFIT` orders), so TM reacts at once, as with cTrader.
+- Spot events at every price step (4 per candle) for subscribed symbols, stamped with the real time.
+- Order and deal IDs that the simulated broker does not have (market and closing orders, deals) count up from 800,000,000.
+
 ## 11. Build steps
 
 Each step on the owner's go, each tested before the next.
@@ -199,7 +209,7 @@ Each step on the owner's go, each tested before the next.
 | 1 | `rewind-download`: Dukascopy files → monthly M1 / M5 CSV for the six symbols; summary | **Built 20-Oct-2026** — 8 tests; trial week of EURUSD complete (7,186 minutes, no gaps); prices within 0.06 % of IC Markets' for all six symbols; full download running (log in `~/rewind/logs/`). Owner to glance at a few days in Google Sheets |
 | 2 | Chart in the browser: timeframes, scroll, go to, replay cursor, step / play, levels | **Built 21-Oct-2026** — 14 tests (D1/H4 boundaries summer and winter, no candle after the cursor, forming last candle, paging back, weekend in one step, go-to limits, skip targets across the clock changes); tried in the browser: steps, play at 30/s, go to, skips, D1 / M5, a level carried from D1 to M5, scrolling back. Owner replays a known week |
 | 3 | Simulated broker + order panel: manual trades, SL/TP, P/L, commission, sessions, `trades.csv` | **Built 21-Oct-2026** — 10 broker tests (fill at the ask, SL inside a candle at its price and after a gap at the open, SL-before-TP order inside a candle, buy-stop inside a candle and after a gap, refusals, market closed, partial close and JPY profit in USD, flat-only go to, restart); in the browser: buy with SL/TP, SL dragged on the chart, partial close, refusals shown, SL hit while playing, new session refused while a position is open and created when flat. Owner trades a known day |
-| 4 | Open API server + certificate; Trader-side T1–T3 (in the Trader repo) | `Trader.ListAccounts` and then TM connect to Rewind; TM takes over a manual trade, hedges fill and re-hedge on replayed prices |
+| 4 | Open API server + certificate; Trader-side T1–T3 (in the Trader repo) | **Built 21-Oct-2026** — 5 end-to-end tests over TLS (wrong secret refused; market order accepted + filled under its ID with the relative stop-loss and real-time opening; refusal as order error; stop order filled for every client while the replay moves, spots at each step; past candles moved into real time). Live: `Trader.ListAccounts` listed account 9000001; **TM unchanged** took over a manual EURUSD sell (mirror, both hedges at the stop-loss, stop-losses removed), then on replayed prices: hedges filled at H, hedge stops at ½R, stops hit, re-hedge, 2R warning; after Close all its state was empty |
 | 5 | Exact mode tuning, results CSV with R values, polishing | A full replayed week with TM, results checked against TM's `actions.csv` |
 
 ## 12. Technology
@@ -220,6 +230,8 @@ Each step on the owner's go, each tested before the next.
 - **Spreads:** Dukascopy's own spreads, or fixed per-symbol spreads from the Audit Bot's measurements (closer to the owner's brokers)?
 - **Dukascopy's terms of use** for the data feed: not found online; third parties speak of personal use. Rewind keeps the data private (never in Git); ask Dukascopy if it is ever to be shared.
 - **News pop-ups in replay:** TM's news / Friday pop-ups follow the real clock. Rewind could show its own news markers on the chart from Trader's `news-releases.json` (copied) instead.
+- **TM's speed in replay:** TM looks once a second; while playing fast it acts late (step 5: exact mode keeps each price step 1.2 s while positions are open).
+- **TM's files in ~/tradebot:** TM writes its replay state and logs under Trader's folders (`run/tm/rewind-9000001.json`, `logs/rewind/`), apart from the demo accounts. Accepted for now.
 - **More precise replay:** use the M1 files as the price path (20 steps per M5 bar) — when the 4-step guess proves too rough.
 - **Two accounts** (an IC Markets-like and a Pepperstone-like one, different spreads/commission) — later, if useful.
 
@@ -237,3 +249,4 @@ Each step on the owner's go, each tested before the next.
 | v0.2 | 20 Oct 2026 | Step 1 built: `rewind-download`. Confirmed file format, URL (month from 00) and price factors (checked against IC Markets). Changed: one download at a time (Dukascopy throttles bursts with HTTP 429), HTTPS only, forex Saturdays skipped, SharpCompress instead of a copied LZMA decoder; history is personal use only |
 | v0.3 | 21 Oct 2026 | Step 2 built: the chart (§5). Decided: H4 and D1 start at 17:00 New York as in cTrader (open question closed); a step moves to the next candle of the symbol on screen; replay position and levels saved in `sessions/default/`; ASP.NET console logging instead of Serilog for now |
 | v0.4 | 21 Oct 2026 | Step 3 built: the simulated broker (§7), order panel, sessions and results files (§8). Decided: commission and symbol details from the IC Markets demo (open question closed); USD conversion from crosses of the six symbols (open question closed); a market closed after 10 minutes without a candle; R measured against the stop-loss given at opening |
+| v0.5 | 21 Oct 2026 | Step 4 built: Rewind's Open API server (§10), certificate and TM's files (§9). Trader side: T1 built (Trader open-code-pieces v1.2), T2 already existed, T3 needs no code (`SSL_CERT_FILE` confirmed). TM ran unchanged on replayed prices |

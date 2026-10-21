@@ -45,6 +45,9 @@ public sealed class SimBroker : IMarket
     /// <summary>After a change made by a request (an order, a close) — not after price steps, which the replay clock reports.</summary>
     public event Action? Changed;
 
+    /// <summary>Every new price of a symbol (each price step, and all symbols after a jump or a session change). Inside the lock: never call back.</summary>
+    public event Action<string, Quote>? QuoteChanged;
+
     public IReadOnlyDictionary<string, SymbolSpec> Specs => _specs;
 
     // ---- sessions ---------------------------------------------------------------------------------------------
@@ -130,7 +133,7 @@ public sealed class SimBroker : IMarket
                 throw new BrokerException("TRADING_BAD_STOPS", $"A {(dir > 0 ? "buy-stop must be above the ask" : "sell-stop must be below the bid")} ({Fmt(spec, dir > 0 ? q.Ask : q.Bid)})");
             var o = new PendingOrder { Id = _account.NextId++, Symbol = symbol, Dir = dir, Volume = volume, StopPrice = stopPrice, CreatedUtc = _now, Label = label, Comment = comment };
             _account.Orders.Add(o);
-            Record(new BrokerEvent(_now, EventKind.OrderPlaced, symbol, null, o.Id, dir, volume, stopPrice, $"{Side(dir)}-stop at {Fmt(spec, stopPrice)}", label));
+            Record(new BrokerEvent(_now, EventKind.OrderPlaced, symbol, null, o.Id, dir, volume, stopPrice, $"{Side(dir)}-stop at {Fmt(spec, stopPrice)}", label) { Order = o.Copy() });
             Done();
             return o;
         }
@@ -147,7 +150,7 @@ public sealed class SimBroker : IMarket
             if (o.Dir > 0 ? stopPrice <= q.Ask : stopPrice >= q.Bid)
                 throw new BrokerException("TRADING_BAD_STOPS", $"A {(o.Dir > 0 ? "buy-stop must stay above the ask" : "sell-stop must stay below the bid")} ({Fmt(spec, o.Dir > 0 ? q.Ask : q.Bid)})");
             o.StopPrice = stopPrice;
-            Record(new BrokerEvent(_now, EventKind.OrderAmended, o.Symbol, null, o.Id, o.Dir, o.Volume, stopPrice, $"moved to {Fmt(spec, stopPrice)}", o.Label));
+            Record(new BrokerEvent(_now, EventKind.OrderAmended, o.Symbol, null, o.Id, o.Dir, o.Volume, stopPrice, $"moved to {Fmt(spec, stopPrice)}", o.Label) { Order = o.Copy() });
             Done();
         }
     }
@@ -158,7 +161,7 @@ public sealed class SimBroker : IMarket
         {
             var o = _account.Orders.FirstOrDefault(x => x.Id == orderId) ?? throw new BrokerException("OA_ORDER_NOT_FOUND", $"Order {orderId} not found");
             _account.Orders.Remove(o);
-            Record(new BrokerEvent(_now, EventKind.OrderCancelled, o.Symbol, null, o.Id, o.Dir, o.Volume, o.StopPrice, "cancelled", o.Label));
+            Record(new BrokerEvent(_now, EventKind.OrderCancelled, o.Symbol, null, o.Id, o.Dir, o.Volume, o.StopPrice, "cancelled", o.Label) { Order = o.Copy() });
             Done();
         }
     }
@@ -176,7 +179,7 @@ public sealed class SimBroker : IMarket
             p.StopLoss = stopLoss;
             p.TakeProfit = takeProfit;
             Record(new BrokerEvent(_now, EventKind.ProtectionChanged, p.Symbol, p.Id, null, p.Dir, p.Volume, p.Entry,
-                $"SL {(stopLoss is null ? "none" : Fmt(spec, stopLoss.Value))}, TP {(takeProfit is null ? "none" : Fmt(spec, takeProfit.Value))}", p.Label));
+                $"SL {(stopLoss is null ? "none" : Fmt(spec, stopLoss.Value))}, TP {(takeProfit is null ? "none" : Fmt(spec, takeProfit.Value))}", p.Label) { Position = p.Copy() });
             Done();
         }
     }
@@ -206,7 +209,7 @@ public sealed class SimBroker : IMarket
             foreach (var o in _account.Orders.ToList())
             {
                 _account.Orders.Remove(o);
-                Record(new BrokerEvent(_now, EventKind.OrderCancelled, o.Symbol, null, o.Id, o.Dir, o.Volume, o.StopPrice, "cancelled (close all)", o.Label));
+                Record(new BrokerEvent(_now, EventKind.OrderCancelled, o.Symbol, null, o.Id, o.Dir, o.Volume, o.StopPrice, "cancelled (close all)", o.Label) { Order = o.Copy() });
             }
             foreach (var p in _account.Positions.ToList())
             {
@@ -294,6 +297,7 @@ public sealed class SimBroker : IMarket
                 continue;
             var b = h.Bars[n - 1];
             _quotes[h.Symbol.Name] = new Quote(b.BidClose, b.AskClose, b.EndUtc, cursorUtc - b.EndUtc <= ClosedAfter);
+            QuoteChanged?.Invoke(h.Symbol.Name, _quotes[h.Symbol.Name]);
         }
     }
 
@@ -310,6 +314,7 @@ public sealed class SimBroker : IMarket
             var t = b.TimeUtc + TimeSpan.FromTicks(Bar.Length.Ticks * i / (path.Length - 1));
             _now = t;
             _quotes[symbol] = new Quote(path[i].Bid, path[i].Ask, t, true);
+            QuoteChanged?.Invoke(symbol, _quotes[symbol]);
             changed |= Trigger(symbol, path[i].Bid, path[i].Ask, gap: i == 0);
         }
         return changed;
@@ -331,7 +336,7 @@ public sealed class SimBroker : IMarket
             var price = gap ? (o.Dir > 0 ? ask : bid) : o.StopPrice;
             _account.Orders.Remove(o);
             Record(new BrokerEvent(_now, EventKind.OrderFilled, symbol, null, o.Id, o.Dir, o.Volume, price,
-                $"{Side(o.Dir)}-stop {Fmt(_specs[symbol], o.StopPrice)} filled at {Fmt(_specs[symbol], price)}", o.Label));
+                $"{Side(o.Dir)}-stop {Fmt(_specs[symbol], o.StopPrice)} filled at {Fmt(_specs[symbol], price)}", o.Label) { Order = o.Copy() });
             OpenPosition(symbol, o.Dir, o.Volume, price, o.Label, o.Comment, null, null, o.Id);
             changed = true;
         }
@@ -359,14 +364,15 @@ public sealed class SimBroker : IMarket
         var commission = Commission(symbol, volume, price);
         var p = new Position
         {
-            Id = _account.NextId++, Symbol = symbol, Dir = dir, Volume = volume, Entry = price, OpenUtc = _now,
+            Id = _account.NextId++, Symbol = symbol, Dir = dir, Volume = volume, Entry = price, OpenUtc = _now, OpenRealUtc = DateTime.UtcNow,
             StopLoss = sl, TakeProfit = tp, InitialStopLoss = sl, Label = label, Comment = comment, OpenCommission = commission,
         };
         _account.Positions.Add(p);
         _account.Balance -= commission;
         _account.CommissionPaid += commission;
         Record(new BrokerEvent(_now, EventKind.PositionOpened, symbol, p.Id, orderId, dir, volume, price,
-            $"{Side(dir)} {spec.Lots(volume):0.##} at {Fmt(spec, price)}" + (sl is null ? "" : $", SL {Fmt(spec, sl.Value)}") + (tp is null ? "" : $", TP {Fmt(spec, tp.Value)}"), label));
+            $"{Side(dir)} {spec.Lots(volume):0.##} at {Fmt(spec, price)}" + (sl is null ? "" : $", SL {Fmt(spec, sl.Value)}") + (tp is null ? "" : $", TP {Fmt(spec, tp.Value)}"), label)
+            { Position = p.Copy(), Commission = commission, Balance = _account.Balance });
         return p;
     }
 
@@ -387,7 +393,8 @@ public sealed class SimBroker : IMarket
 
         var what = reason switch { CloseReason.StopLoss => "stop-loss hit", CloseReason.TakeProfit => "take-profit hit", _ => "closed" };
         Record(new BrokerEvent(_now, all ? EventKind.PositionClosed : EventKind.PositionReduced, p.Symbol, p.Id, null, p.Dir, volume, price,
-            $"{what}: {spec.Lots(volume):0.##} at {Fmt(spec, price)}, {pnl - openCommission - closeCommission:+0.00;-0.00} USD", p.Label));
+            $"{what}: {spec.Lots(volume):0.##} at {Fmt(spec, price)}, {pnl - openCommission - closeCommission:+0.00;-0.00} USD", p.Label)
+            { Position = p.Copy(), Reason = reason, Commission = closeCommission, GrossProfit = pnl, Balance = _account.Balance });
         _journal?.Trade(p, spec, volume, price, _now, reason, pnl, openCommission + closeCommission);
     }
 

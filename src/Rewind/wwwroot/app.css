@@ -70,6 +70,9 @@ td.lots input { width: 56px; }
 .neg { color: var(--down); }
 .danger:hover { border-color: var(--down); color: var(--down); }
 .session { margin-left: auto; }
+.tm { padding: 2px 8px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); font-size: 12px; margin-left: auto; }
+.tm.on { color: #fff; background: var(--up); border-color: var(--up); }
+.tm + .session { margin-left: 0; }
 .ticket { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
 .ticket button { display: flex; flex-direction: column; align-items: center; padding: 6px; color: #fff; border: 0; }
 .ticket button b { font-size: 15px; font-variant-numeric: tabular-nums; }

@@ -18,7 +18,8 @@ Standing instructions for Claude Code in this repository. Read this first, then 
 
 - Rewind is a **separate project**: no project references to Trader's code. If a piece of Trader is needed, **copy** it into Rewind with a comment naming its origin (file and commit).
 - Never read, write or print `~/.config/trader/secrets.env` or other Trader secrets. Rewind's TM settings live in `~/rewind/tm/` and contain only fake values.
-- Never change files in `~/code/Trader` or `~/tradebot/` from this project. The Trader-side changes of spec §9 (T1–T3) are made in the Trader repository, under its own rules (its CLAUDE.md), on the owner's go.
+- Never change files in `~/code/Trader` or `~/tradebot/` from this project. The Trader-side changes of spec §9 (T1–T3) are done (Trader open-code-pieces v1.2); any further one is made in the Trader repository, under its own rules (its CLAUDE.md), on the owner's go.
+- Testing with TM: stop it by its exact PID (find it by its connection: `ss -tnp 'dport = :5036'`); a `pgrep -f`/`pkill -f` pattern can match the shell running it. Leave the Rewind account flat afterwards.
 - Do not stop, restart or redeploy Trader's services (`trader-auditbot`, `trader-tm`, `trader-auditreport`).
 - Rewind never connects to cTrader or any broker. The only outside access is the Dukascopy download (spec §4): at most 4 requests at a time, resume, no re-downloading.
 

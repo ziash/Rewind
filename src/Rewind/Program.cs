@@ -1,13 +1,15 @@
 // Rewind (docs/spec.md): replays past prices in the browser and trades them on a simulated account.
 // Step 2: the chart — timeframes, scroll back, go to, step / play, levels (spec §5, §6).
 // Step 3: the simulated broker and order panel — market orders, SL/TP, P/L, commission, sessions (spec §7, §8).
+// Step 4: the Open API server, so TM (Trader project) trades on Rewind like on a broker (spec §9, §10):
+// localhost:5036 (TLS); TM's files in ~/rewind/tm/ (run-tm.sh), the certificate in ~/rewind/certs/.
 // Open http://localhost:5180.
 //
 // Reads ~/rewind/history/<SYMBOL>/*.m5.csv (rewind-download, spec §4) and ~/rewind/config/ (symbols.json,
 // rewind.json; the copies next to the program if missing). Each session lives in ~/rewind/sessions/<name>/.
 // Listens on localhost only.
 //
-// Options: --dir <folder> (default ~/rewind), --port <port> (default 5180).
+// Options: --dir <folder> (default ~/rewind), --port <port> (default 5180), --api-port <port> (default 5036).
 
 using System.Globalization;
 using System.Net.WebSockets;
@@ -20,10 +22,12 @@ using Rewind.Replay;
 
 var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "rewind");
 var port = 5180;
+var apiPort = 5036;
 for (var i = 0; i + 1 < args.Length; i++)
 {
     if (args[i] == "--dir") root = args[++i];
     else if (args[i] == "--port") port = int.Parse(args[++i], CultureInfo.InvariantCulture);
+    else if (args[i] == "--api-port") apiPort = int.Parse(args[++i], CultureInfo.InvariantCulture);
 }
 
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [], ContentRootPath = AppContext.BaseDirectory });
@@ -58,6 +62,13 @@ clock.Changed += updates.Broadcast;
 broker.Changed += () => updates.Broadcast(clock.State, false);
 sessions.OpenLast();
 
+void Info(string m) => log.LogInformation("{Message}", m);
+var certificate = Rewind.OpenApi.Certificates.Ensure(Path.Combine(root, "certs"), Info);
+var credentials = Rewind.OpenApi.TmFiles.Ensure(Path.Combine(root, "tm"), apiPort, specs.Keys.Where(history.ContainsKey), Info);
+var openApi = new Rewind.OpenApi.OpenApiServer(apiPort, certificate, credentials, broker, clock, history, Info);
+updates.TmConnections = () => openApi.Connections;
+openApi.ConnectionsChanged += () => updates.Broadcast(clock.State, false);
+
 // ---- API -------------------------------------------------------------------------------------------------------
 var api = app.MapGroup("/api");
 
@@ -72,6 +83,7 @@ api.MapGet("/info", () => new
     Specs = specs.Values.Where(s => history.ContainsKey(s.Name)),
     config.StartBalance,
     config.Leverage,
+    TmConnections = openApi.Connections,
 });
 
 api.MapGet("/candles", (string symbol, string tf, long? before, int? count) =>
@@ -134,6 +146,7 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 
 _ = clock.RunAsync(app.Lifetime.ApplicationStopping);
+_ = openApi.RunAsync(app.Lifetime.ApplicationStopping);
 log.LogInformation("Rewind on http://localhost:{Port} — replay at {Cursor:yyyy-MM-dd HH:mm} UTC, {Symbol} {Tf}", port, clock.State.CursorUtc, clock.State.Symbol, clock.State.Timeframe);
 await app.RunAsync();
 return 0;
@@ -194,6 +207,9 @@ sealed class Updates(ReplayClock clock, IReadOnlyDictionary<string, SymbolHistor
     private readonly Lock _lock = new();
     private readonly List<(WebSocket Socket, SemaphoreSlim Gate)> _sockets = [];
 
+    /// <summary>How many TM connections Rewind's Open API has (shown in the header).</summary>
+    public Func<int>? TmConnections { get; set; }
+
     public static object ToJson(ChartCandle c) => new
     {
         time = (long)(c.TimeUtc - DateTime.UnixEpoch).TotalSeconds,
@@ -218,7 +234,7 @@ sealed class Updates(ReplayClock clock, IReadOnlyDictionary<string, SymbolHistor
     public void Broadcast(ReplayState s, bool reload)
     {
         var last = reload ? null : Timeframes.Candles(history[s.Symbol], s.Timeframe, s.CursorUtc, DateTime.MaxValue, 1).Select(ToJson).FirstOrDefault();
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(new { state = Describe(s), reload, candle = last, account = broker.Snapshot(), session = sessions.Current }, Json);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new { state = Describe(s), reload, candle = last, account = broker.Snapshot(), session = sessions.Current, tm = TmConnections?.Invoke() ?? 0 }, Json);
         List<(WebSocket Socket, SemaphoreSlim Gate)> sockets;
         lock (_lock)
             sockets = _sockets.ToList();
@@ -251,7 +267,7 @@ sealed class Updates(ReplayClock clock, IReadOnlyDictionary<string, SymbolHistor
             _sockets.Add(entry);
         try
         {
-            var hello = JsonSerializer.SerializeToUtf8Bytes(new { state = Describe(clock.State), reload = false, candle = (object?)null, account = broker.Snapshot(), session = sessions.Current }, Json);
+            var hello = JsonSerializer.SerializeToUtf8Bytes(new { state = Describe(clock.State), reload = false, candle = (object?)null, account = broker.Snapshot(), session = sessions.Current, tm = TmConnections?.Invoke() ?? 0 }, Json);
             await SendAsync(socket, entry.Item2, hello);
             var buffer = new byte[256];
             while (socket.State == WebSocketState.Open && !ct.IsCancellationRequested)

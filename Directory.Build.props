@@ -6,6 +6,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- NU1608: cTrader.OpenAPI.Net pins old dependency ranges (same as in Trader); NU1903 etc. stay errors. -->
+    <WarningsNotAsErrors>NU1608</WarningsNotAsErrors>
     <NuGetAudit>true</NuGetAudit>
     <NuGetAuditMode>all</NuGetAuditMode>
   </PropertyGroup>

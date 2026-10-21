@@ -133,6 +133,8 @@ function connect() {
     if (m.reload || changed) reload().catch(showError);
     else applyCandle(m.candle);
     if (m.account) { account = m.account; renderAccount(account); }
+    $('tm').textContent = m.tm > 0 ? 'TM on' : 'TM off';
+    $('tm').classList.toggle('on', m.tm > 0);
   };
   ws.onclose = () => {
     showError(new Error('Connection to Rewind lost — retrying…'));
