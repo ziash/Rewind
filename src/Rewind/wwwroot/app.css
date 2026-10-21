@@ -1,0 +1,76 @@
+:root {
+  --bg: #131722;
+  --panel: #1c2030;
+  --line: #2a2e39;
+  --text: #d1d4dc;
+  --muted: #8a8f9c;
+  --accent: #2962ff;
+  --level: #f0b90b;
+  --up: #26a69a;
+  --down: #ef5350;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #ffffff;
+    --panel: #f5f6f8;
+    --line: #e0e3eb;
+    --text: #131722;
+    --muted: #6a6d78;
+    --accent: #2962ff;
+    --level: #c77c02;
+    color-scheme: light;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: flex; flex-direction: column;
+  background: var(--bg); color: var(--text);
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif;
+}
+.bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.controls { border-top: 1px solid var(--line); border-bottom: 0; }
+.brand { font-size: 15px; letter-spacing: .5px; }
+.group { display: inline-flex; gap: 4px; align-items: center; }
+button, select, input {
+  font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: .5; cursor: default; }
+.clock { font-variant-numeric: tabular-nums; }
+.clock #utc { font-weight: 600; font-size: 14px; }
+.clock .sub { color: var(--muted); margin-left: 8px; }
+.sep { flex: 0 0 8px; }
+#status { color: var(--muted); margin-left: auto; }
+#status.error { color: var(--down); }
+main { flex: 1; display: flex; min-height: 0; }
+#chart { flex: 1; min-width: 0; position: relative; }
+#chart.picking { cursor: crosshair; }
+aside {
+  width: 220px; padding: 10px 12px; overflow-y: auto;
+  background: var(--panel); border-left: 1px solid var(--line);
+}
+aside h2 { font-size: 13px; margin: 0 0 8px; }
+aside h2 small { color: var(--muted); font-weight: normal; }
+aside input { width: 100%; min-width: 0; }
+.hint { color: var(--muted); font-size: 12px; }
+#levels { list-style: none; padding: 0; margin: 0; }
+#levels li {
+  display: flex; align-items: center; gap: 6px; padding: 4px 0;
+  border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums;
+}
+#levels li .price { color: var(--level); font-weight: 600; }
+#levels li .note { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#levels li button { padding: 0 6px; }
+@media (max-width: 700px) {
+  main { flex-direction: column; }
+  aside { width: auto; border-left: 0; border-top: 1px solid var(--line); max-height: 30vh; }
+  .clock .sub { display: block; margin-left: 0; }
+}

@@ -6,7 +6,7 @@ A chart in the browser replays past prices: scroll back, go to any date, switch 
 
 | Item | Value |
 |---|---|
-| Status | **Step 1 built** — history downloader; full download running. Steps 2–5 not started |
+| Status | **Steps 1–2 built** — history downloader and the chart. Steps 3–5 not started |
 | Specification | [docs/spec.md](docs/spec.md) — the single source of truth (goal, design, build steps, open questions, history) |
 | Price history | Dukascopy free data feed: 24 months, AUDJPY, EURGBP, EURUSD, GBPJPY, BTCUSD, ETHUSD, bid and ask; downloaded by Rewind's own tool |
 | Runs on | Ubuntu, .NET 10; GUI at `http://localhost:5180` in the browser; broker side for TM at `localhost:5036` |
@@ -30,6 +30,14 @@ dotnet src/Rewind.Download/bin/Release/net10.0/rewind-download.dll --help
 ```
 
 Output: `~/rewind/history/<SYMBOL>/<yyyy-MM>.m5.csv` (and `.m1.csv.gz`), opens in Google Sheets. Personal use only — never committed (except two small test sample files).
+
+## The chart (step 2)
+
+```bash
+dotnet run --project src/Rewind          # then open http://localhost:5180
+```
+
+Symbol and timeframe at the top, replay time in UTC / London / New York, **Go to** a date. Bottom: **Step** (→ key), **Play / Pause** (space), speed, **Next day**, **London open**, **New York open**. Right: levels (**+ Level** then click the chart, or Alt+click). Nothing after the replay time is ever shown.
 
 ## Build steps
 

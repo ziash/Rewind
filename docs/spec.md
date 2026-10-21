@@ -4,8 +4,8 @@
 
 | Item | Value |
 |---|---|
-| Status | **Step 1 built** (history downloader, 20-Oct-2026); full 24-month download running; steps 2–5 not started (§11) |
-| Document version | v0.2 (20-Oct-2026) — history in §15 |
+| Status | **Steps 1–2 built** (history downloader 20-Oct-2026, chart 21-Oct-2026); steps 3–5 not started (§11) |
+| Document version | v0.3 (21-Oct-2026) — history in §15 |
 | Owner | Zeeshan |
 | Repository | [github.com/ziash/Rewind](https://github.com/ziash/Rewind) (private) — separate from [Trader](https://github.com/ziash/Trader) |
 | Runs on | The Ubuntu laptop; browser GUI at `http://localhost:5180`; the broker side at `localhost:5036` |
@@ -86,17 +86,17 @@ Things to know:
 
 ## 5. The chart (browser GUI)
 
-Built with **Lightweight Charts**, TradingView's free open-source chart library (Apache 2.0 licence; it asks for a TradingView attribution link on the page), served from Rewind itself (no internet needed when running).
+Built with **Lightweight Charts** v5.2.1, TradingView's free open-source chart library (Apache 2.0 licence; its TradingView logo stays on the chart as the attribution), copied into `src/Rewind/wwwroot/lib/` with its licence and served from Rewind itself (no internet needed when running). Run: `dotnet run --project src/Rewind`, then open `http://localhost:5180`.
 
 | Feature | Detail |
 |---|---|
-| Candles | Bid candles, as cTrader shows them; a thin line for the current ask (optional) |
-| Timeframes | M5, M15, H1, H4, D1 — switching keeps the replay cursor; D1 days start at 00:00 UTC (to be compared with cTrader's D1 in step 2) |
+| Candles | Bid candles, as cTrader shows them (an ask line is left for step 3, with the order panel) |
+| Timeframes | M5, M15, H1, H4, D1 — switching keeps the replay cursor. M5, M15, H1 follow the UTC clock; **H4 and D1 start at 17:00 New York** like cTrader's (IC Markets checked 21-Oct-2026: D1 and H4 open 21:00 UTC in summer, 22:00 in winter; H4 at 17, 21, 01, 05, 09, 13 New York) |
 | No peeking | Candles after the replay cursor are not sent to the browser; the last candle of each timeframe is drawn **as far as it has formed** (the D1 candle of today grows bar by bar as you step on M5) |
-| Scroll and zoom | Mouse wheel / drag, as in TradingView; scrolling back never moves the cursor |
-| Go to | Date and time box (UTC, with New York and London time shown next to it); jumping is allowed only when the account is flat (§8) |
-| Replay controls | **Step** (one M5 bar), **Play / Pause**, speed (§6.2), and "step to next day / next London open / next New York open" |
-| Levels | Horizontal lines you place (e.g. on D1) stay on every timeframe — the way to carry an entry idea from D1 down to M5 |
+| Scroll and zoom | Mouse wheel / drag, as in TradingView; older candles load in pages of 500 when you reach the left edge; scrolling back never moves the cursor |
+| Go to | Date and time box (UTC); the replay time is shown in UTC, London and New York. Kept inside the history (from a week after its start) and on 5-minute marks. From step 3 only when the account is flat (§8) |
+| Replay controls | **Step** (the next 5-minute candle of the symbol on screen — a forex weekend is one step; key →), **Play / Pause** (space), speed 1–60 candles per second, **Next day** (17:00 New York), **London open** / **New York open** (next 08:00 local, Monday–Friday). The position is saved in `~/rewind/sessions/default/replay.json` and restored at start |
+| Levels | Horizontal lines you place (**+ Level** then click, or Alt+click; optional note) stay on every timeframe — the way to carry an entry idea from D1 down to M5. Removed with ×; saved per symbol in `sessions/default/levels.json`. Dragging a level is not possible (the chart library has no draggable lines); remove and place again |
 | Symbol switch | One symbol on screen at a time; all six move with the same cursor; positions on other symbols keep running |
 | Order panel | Buy / Sell at market; lots; optional stop-loss and take-profit (typed in, or dragged on the chart); close a position (all or part); close all |
 | On the chart | Every position (entry line, SL, TP) and every pending order, coloured by role: yours, TM's mirror, TM's hedges; label shown on hover |
@@ -194,7 +194,7 @@ Each step on the owner's go, each tested before the next.
 | Step | Content | Test |
 |---|---|---|
 | 1 | `rewind-download`: Dukascopy files → monthly M1 / M5 CSV for the six symbols; summary | **Built 20-Oct-2026** — 8 tests; trial week of EURUSD complete (7,186 minutes, no gaps); prices within 0.06 % of IC Markets' for all six symbols; full download running (log in `~/rewind/logs/`). Owner to glance at a few days in Google Sheets |
-| 2 | Chart in the browser: timeframes, scroll, go to, replay cursor, step / play, levels | Owner replays a known week |
+| 2 | Chart in the browser: timeframes, scroll, go to, replay cursor, step / play, levels | **Built 21-Oct-2026** — 14 tests (D1/H4 boundaries summer and winter, no candle after the cursor, forming last candle, paging back, weekend in one step, go-to limits, skip targets across the clock changes); tried in the browser: steps, play at 30/s, go to, skips, D1 / M5, a level carried from D1 to M5, scrolling back. Owner replays a known week |
 | 3 | Simulated broker + order panel: manual trades, SL/TP, P/L, commission, sessions, `trades.csv` | Hand-checked trades (fill prices, stop hits, gaps) |
 | 4 | Open API server + certificate; Trader-side T1–T3 (in the Trader repo) | `Trader.ListAccounts` and then TM connect to Rewind; TM takes over a manual trade, hedges fill and re-hedge on replayed prices |
 | 5 | Exact mode tuning, results CSV with R values, polishing | A full replayed week with TM, results checked against TM's `actions.csv` |
@@ -209,7 +209,7 @@ Each step on the owner's go, each tested before the next.
 | Browser page | Plain HTML / JavaScript + Lightweight Charts (copied into the repo, fixed version) — no build tools |
 | Open API side | `TcpListener` + `SslStream` (built into .NET); certificate made once by Rewind, for `localhost`, stored in `~/rewind/certs/` |
 | Compression | SharpCompress (MIT licence, NuGet) for LZMA — simpler than copying the 7-Zip LZMA SDK |
-| Logging | Serilog, UTC times |
+| Logging | The console log of ASP.NET with UTC times (Serilog if more is needed later) |
 | Tests | xUnit: decoder, M1 → M5, fills and gaps, stop rules, clock translation, message handling |
 
 ## 13. Open questions
@@ -219,7 +219,6 @@ Each step on the owner's go, each tested before the next.
 - **USD conversion** of JPY and GBP profits: download USDJPY and GBPUSD as well (two more symbols, conversion only), or a fixed rate per session?
 - **Dukascopy's terms of use** for the data feed: not found online; third parties speak of personal use. Rewind keeps the data private (never in Git); ask Dukascopy if it is ever to be shared.
 - **News pop-ups in replay:** TM's news / Friday pop-ups follow the real clock. Rewind could show its own news markers on the chart from Trader's `news-releases.json` (copied) instead.
-- **D1 candle boundaries:** 00:00 UTC, or 17:00 New York as many brokers draw them? Compare with cTrader in step 2.
 - **More precise replay:** use the M1 files as the price path (20 steps per M5 bar) — when the 4-step guess proves too rough.
 - **Two accounts** (an IC Markets-like and a Pepperstone-like one, different spreads/commission) — later, if useful.
 
@@ -235,3 +234,4 @@ Each step on the owner's go, each tested before the next.
 |---|---|---|
 | v0.1 | 20 Oct 2026 | First draft. Owner's choices: browser app; six symbols; 24 months; 5-minute candles to start; TM runs unchanged on Ubuntu and connects to Rewind like a broker; history downloaded (Dukascopy) by Rewind's own downloader (option c); a completely separate project and repository, copying rather than sharing code with Trader |
 | v0.2 | 20 Oct 2026 | Step 1 built: `rewind-download`. Confirmed file format, URL (month from 00) and price factors (checked against IC Markets). Changed: one download at a time (Dukascopy throttles bursts with HTTP 429), HTTPS only, forex Saturdays skipped, SharpCompress instead of a copied LZMA decoder; history is personal use only |
+| v0.3 | 21 Oct 2026 | Step 2 built: the chart (§5). Decided: H4 and D1 start at 17:00 New York as in cTrader (open question closed); a step moves to the next candle of the symbol on screen; replay position and levels saved in `sessions/default/`; ASP.NET console logging instead of Serilog for now |

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rewind</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="bar">
+    <strong class="brand">Rewind</strong>
+    <select id="symbol" title="Symbol"></select>
+    <div id="tfs" class="group" role="group" aria-label="Timeframe"></div>
+    <div class="clock" title="Replay time: everything after it is hidden">
+      <span id="utc">—</span> <small>UTC</small>
+      <span class="sub">London <span id="ldn">—</span> · New York <span id="ny">—</span></span>
+    </div>
+    <form id="goto" class="group">
+      <input id="gotoTime" type="datetime-local" step="300" title="Go to (UTC)" required>
+      <small>UTC</small>
+      <button type="submit">Go to</button>
+    </form>
+  </header>
+
+  <main>
+    <div id="chart"></div>
+    <aside>
+      <h2>Levels <small id="levelSymbol"></small></h2>
+      <div class="group">
+        <input id="levelNote" placeholder="note (optional)" maxlength="40">
+        <button id="addLevel" title="Then click on the chart">+ Level</button>
+      </div>
+      <p class="hint">Click <b>+ Level</b>, then click the chart — or <b>Alt+click</b> the chart. Levels stay on every timeframe.</p>
+      <ul id="levels"></ul>
+    </aside>
+  </main>
+
+  <footer class="bar controls">
+    <button id="step" title="One 5-minute candle (→ key)">Step ▸</button>
+    <button id="play" title="Play / pause (space)">▶ Play</button>
+    <label>speed <select id="speed"></select> candles/s</label>
+    <span class="sep"></span>
+    <button data-skip="Day" title="Next trading day: 17:00 New York">Next day</button>
+    <button data-skip="London" title="Next 08:00 London, Monday–Friday">London open</button>
+    <button data-skip="NewYork" title="Next 08:00 New York, Monday–Friday">New York open</button>
+    <span id="status" role="status"></span>
+  </footer>
+
+  <script src="lib/lightweight-charts.standalone.production.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
