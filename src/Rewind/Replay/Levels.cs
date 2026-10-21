@@ -10,7 +10,18 @@ public sealed class Levels(string? path)
 {
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
     private readonly Lock _lock = new();
-    private readonly List<Level> _all = Load(path);
+    private string? _path = path;
+    private List<Level> _all = Load(path);
+
+    /// <summary>Switches to another session's levels.json (spec §8).</summary>
+    public void Open(string path)
+    {
+        lock (_lock)
+        {
+            _path = path;
+            _all = Load(path);
+        }
+    }
 
     public IReadOnlyList<Level> For(string symbol)
     {
@@ -42,11 +53,11 @@ public sealed class Levels(string? path)
 
     private void Save()
     {
-        if (path is null)
+        if (_path is null)
             return;
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(_all, Json));
-        File.Move(path + ".tmp", path, overwrite: true);
+        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+        File.WriteAllText(_path + ".tmp", JsonSerializer.Serialize(_all, Json));
+        File.Move(_path + ".tmp", _path, overwrite: true);
     }
 
     private static List<Level> Load(string? path)

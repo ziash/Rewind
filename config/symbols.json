@@ -1,0 +1,15 @@
+{
+  // Symbol details for Rewind's simulated broker (docs/spec.md §7). Copied from the IC Markets demo
+  // (ProtoOASymbol, read 21-Oct-2026). Volumes in Open API units: hundredths of a unit
+  // (forex: 1 lot = 100,000 units = 10,000,000; crypto: 1 lot = 1 coin = 100).
+  // Commission: USD per million USD of traded value, charged on opening and on closing.
+  // Live copy: ~/rewind/config/symbols.json (Rewind uses this file when that one is missing).
+  "symbols": [
+    { "name": "AUDJPY", "base": "AUD", "quote": "JPY", "digits": 3, "pipPosition": 2, "lotSize": 10000000, "minVolume": 100000, "stepVolume": 100000, "maxVolume": 500000000, "commissionPerMillionUsd": 30 },
+    { "name": "EURGBP", "base": "EUR", "quote": "GBP", "digits": 5, "pipPosition": 4, "lotSize": 10000000, "minVolume": 100000, "stepVolume": 100000, "maxVolume": 500000000, "commissionPerMillionUsd": 30 },
+    { "name": "EURUSD", "base": "EUR", "quote": "USD", "digits": 5, "pipPosition": 4, "lotSize": 10000000, "minVolume": 100000, "stepVolume": 100000, "maxVolume": 10000000000, "commissionPerMillionUsd": 30 },
+    { "name": "GBPJPY", "base": "GBP", "quote": "JPY", "digits": 3, "pipPosition": 2, "lotSize": 10000000, "minVolume": 100000, "stepVolume": 100000, "maxVolume": 500000000, "commissionPerMillionUsd": 30 },
+    { "name": "BTCUSD", "base": "BTC", "quote": "USD", "digits": 2, "pipPosition": 2, "lotSize": 100, "minVolume": 1, "stepVolume": 1, "maxVolume": 1000, "commissionPerMillionUsd": 0 },
+    { "name": "ETHUSD", "base": "ETH", "quote": "USD", "digits": 2, "pipPosition": 2, "lotSize": 100, "minVolume": 1, "stepVolume": 1, "maxVolume": 1000, "commissionPerMillionUsd": 0 }
+  ]
+}

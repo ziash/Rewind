@@ -20,18 +20,58 @@
       <small>UTC</small>
       <button type="submit">Go to</button>
     </form>
+    <div class="group session">
+      <label>Session <select id="session"></select></label>
+      <button id="newSession" title="Start a new session (account must be flat)">New…</button>
+    </div>
   </header>
 
   <main>
-    <div id="chart"></div>
+    <section class="work">
+      <div id="chart"></div>
+      <div class="account bar">
+        <span>Balance <b id="balance">—</b></span>
+        <span>Equity <b id="equity">—</b></span>
+        <span>Open P/L <b id="openPnl">—</b></span>
+        <span>Commission <b id="commission">—</b></span>
+        <button id="closeAll" class="danger" title="Close every position and cancel every order">Close all</button>
+      </div>
+      <div class="tables">
+        <table id="positions">
+          <thead><tr><th>ID</th><th>Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>SL</th><th>TP</th><th>Price</th><th>Pips</th><th>P/L $</th><th>Label</th><th>Close lots</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p id="noPositions" class="hint">No open positions.</p>
+        <table id="orders" hidden>
+          <thead><tr><th>Order</th><th>Symbol</th><th>Type</th><th>Lots</th><th>Price</th><th>Label</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
     <aside>
+      <h2>Trade <small id="tradeSymbol"></small></h2>
+      <div class="ticket">
+        <button id="sell" class="sell"><span>SELL</span><b id="bid">—</b></button>
+        <button id="buy" class="buy"><span>BUY</span><b id="ask">—</b></button>
+      </div>
+      <div class="fields">
+        <label>Lots <input id="lots" type="number" min="0.01" step="0.01" value="0.10"></label>
+        <label>Stop-loss <span class="group"><input id="sl" type="number" step="any" placeholder="none"><button id="pickSl" title="Pick the price on the chart">⌖</button></span></label>
+        <label>Take-profit <span class="group"><input id="tp" type="number" step="any" placeholder="none"><button id="pickTp" title="Pick the price on the chart">⌖</button></span></label>
+      </div>
+      <p class="hint">On the chart, drag a position's SL / TP line (or an order) to move it.</p>
+
       <h2>Levels <small id="levelSymbol"></small></h2>
       <div class="group">
         <input id="levelNote" placeholder="note (optional)" maxlength="40">
         <button id="addLevel" title="Then click on the chart">+ Level</button>
       </div>
-      <p class="hint">Click <b>+ Level</b>, then click the chart — or <b>Alt+click</b> the chart. Levels stay on every timeframe.</p>
+      <p class="hint">Click <b>+ Level</b>, then the chart — or <b>Alt+click</b>. Levels stay on every timeframe.</p>
       <ul id="levels"></ul>
+
+      <h2>Messages</h2>
+      <ul id="events"></ul>
     </aside>
   </main>
 
@@ -45,6 +85,21 @@
     <button data-skip="NewYork" title="Next 08:00 New York, Monday–Friday">New York open</button>
     <span id="status" role="status"></span>
   </footer>
+
+  <dialog id="sessionDialog">
+    <form method="dialog" id="sessionForm">
+      <h2>New session</h2>
+      <p class="hint">Starts a fresh account at a date of your choice. The current session is kept and can be opened again.</p>
+      <label>Name <input id="sessionName" required pattern="[A-Za-z0-9_\-]{1,40}" placeholder="e.g. march-2025"></label>
+      <label>Start (UTC) <input id="sessionStart" type="datetime-local" step="300" required></label>
+      <label>Balance (USD) <input id="sessionBalance" type="number" min="1" step="1"></label>
+      <p id="sessionError" class="error-text" role="alert"></p>
+      <div class="group right">
+        <button value="cancel" formnovalidate>Cancel</button>
+        <button id="sessionCreate" value="create" class="on">Start</button>
+      </div>
+    </form>
+  </dialog>
 
   <script src="lib/lightweight-charts.standalone.production.js"></script>
   <script src="app.js"></script>

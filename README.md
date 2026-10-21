@@ -6,7 +6,7 @@ A chart in the browser replays past prices: scroll back, go to any date, switch 
 
 | Item | Value |
 |---|---|
-| Status | **Steps 1–2 built** — history downloader and the chart. Steps 3–5 not started |
+| Status | **Steps 1–3 built** — history downloader, chart, simulated broker with order panel and sessions. Steps 4–5 not started |
 | Specification | [docs/spec.md](docs/spec.md) — the single source of truth (goal, design, build steps, open questions, history) |
 | Price history | Dukascopy free data feed: 24 months, AUDJPY, EURGBP, EURUSD, GBPJPY, BTCUSD, ETHUSD, bid and ask; downloaded by Rewind's own tool |
 | Runs on | Ubuntu, .NET 10; GUI at `http://localhost:5180` in the browser; broker side for TM at `localhost:5036` |
@@ -37,7 +37,9 @@ Output: `~/rewind/history/<SYMBOL>/<yyyy-MM>.m5.csv` (and `.m1.csv.gz`), opens i
 dotnet run --project src/Rewind          # then open http://localhost:5180
 ```
 
-Symbol and timeframe at the top, replay time in UTC / London / New York, **Go to** a date. Bottom: **Step** (→ key), **Play / Pause** (space), speed, **Next day**, **London open**, **New York open**. Right: levels (**+ Level** then click the chart, or Alt+click). Nothing after the replay time is ever shown.
+Symbol and timeframe at the top, replay time in UTC / London / New York, **Go to** a date, **Session** (and **New…**). Bottom: **Step** (→ key), **Play / Pause** (space), speed, **Next day**, **London open**, **New York open**. Right: the **order panel** (SELL / BUY, lots, SL, TP — ⌖ picks a price on the chart), levels (**+ Level** then click the chart, or Alt+click), messages. Under the chart: balance, equity, open P/L, commission, positions and orders; drag SL / TP lines on the chart to move them. Nothing after the replay time is ever shown.
+
+Each session keeps its own account and results in `~/rewind/sessions/<name>/` (`trades.csv`, `events.csv` open in Google Sheets). Go to a date or change session only with no open positions.
 
 ## Build steps
 

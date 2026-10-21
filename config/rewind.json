@@ -1,0 +1,8 @@
+{
+  // Rewind's account settings (docs/spec.md §7). Live copy: ~/rewind/config/rewind.json.
+  "startBalance": 5000,        // USD, for a new session (can be changed when creating one)
+  "leverage": 500,             // shown only; margin is not simulated
+  // Used only if a symbol needed for converting profits to USD has no history (spec §7):
+  // GBPUSD = EURUSD / EURGBP, USDJPY = GBPJPY / GBPUSD.
+  "fallbackRates": { "GBPUSD": 1.30, "USDJPY": 150.0 }
+}

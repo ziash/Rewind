@@ -4,8 +4,8 @@
 
 | Item | Value |
 |---|---|
-| Status | **Steps 1–2 built** (history downloader 20-Oct-2026, chart 21-Oct-2026); steps 3–5 not started (§11) |
-| Document version | v0.3 (21-Oct-2026) — history in §15 |
+| Status | **Steps 1–3 built** (history downloader 20-Oct-2026; chart and simulated broker 21-Oct-2026); steps 4–5 not started (§11) |
+| Document version | v0.4 (21-Oct-2026) — history in §15 |
 | Owner | Zeeshan |
 | Repository | [github.com/ziash/Rewind](https://github.com/ziash/Rewind) (private) — separate from [Trader](https://github.com/ziash/Trader) |
 | Runs on | The Ubuntu laptop; browser GUI at `http://localhost:5180`; the broker side at `localhost:5036` |
@@ -90,18 +90,19 @@ Built with **Lightweight Charts** v5.2.1, TradingView's free open-source chart l
 
 | Feature | Detail |
 |---|---|
-| Candles | Bid candles, as cTrader shows them (an ask line is left for step 3, with the order panel) |
+| Candles | Bid candles, as cTrader shows them, and a dotted line at the current ask |
 | Timeframes | M5, M15, H1, H4, D1 — switching keeps the replay cursor. M5, M15, H1 follow the UTC clock; **H4 and D1 start at 17:00 New York** like cTrader's (IC Markets checked 21-Oct-2026: D1 and H4 open 21:00 UTC in summer, 22:00 in winter; H4 at 17, 21, 01, 05, 09, 13 New York) |
 | No peeking | Candles after the replay cursor are not sent to the browser; the last candle of each timeframe is drawn **as far as it has formed** (the D1 candle of today grows bar by bar as you step on M5) |
 | Scroll and zoom | Mouse wheel / drag, as in TradingView; older candles load in pages of 500 when you reach the left edge; scrolling back never moves the cursor |
-| Go to | Date and time box (UTC); the replay time is shown in UTC, London and New York. Kept inside the history (from a week after its start) and on 5-minute marks. From step 3 only when the account is flat (§8) |
+| Go to | Date and time box (UTC); the replay time is shown in UTC, London and New York. Kept inside the history (from a week after its start) and on 5-minute marks. **Only when the account is flat** (§8); the skips (next day / London / New York) move forward and carry open positions through every price on the way |
 | Replay controls | **Step** (the next 5-minute candle of the symbol on screen — a forex weekend is one step; key →), **Play / Pause** (space), speed 1–60 candles per second, **Next day** (17:00 New York), **London open** / **New York open** (next 08:00 local, Monday–Friday). The position is saved in `~/rewind/sessions/default/replay.json` and restored at start |
 | Levels | Horizontal lines you place (**+ Level** then click, or Alt+click; optional note) stay on every timeframe — the way to carry an entry idea from D1 down to M5. Removed with ×; saved per symbol in `sessions/default/levels.json`. Dragging a level is not possible (the chart library has no draggable lines); remove and place again |
 | Symbol switch | One symbol on screen at a time; all six move with the same cursor; positions on other symbols keep running |
-| Order panel | Buy / Sell at market; lots; optional stop-loss and take-profit (typed in, or dragged on the chart); close a position (all or part); close all |
-| On the chart | Every position (entry line, SL, TP) and every pending order, coloured by role: yours, TM's mirror, TM's hedges; label shown on hover |
-| Tables | Positions and orders (with label, side, lots, price, SL, TP, open P/L in USD and pips); account: balance, equity, open P/L, commission paid |
-| Messages | Broker events (filled, stop hit, cancelled) as a list with replay time; TM's own pop-ups keep coming through TM's notifications on the desktop |
+| Order panel | **SELL bid / BUY ask** buttons (greyed while the market is closed); lots; optional stop-loss and take-profit typed in or picked on the chart (⌖), shown as dotted lines before the order. Open positions: SL / TP editable in the table or **dragged on the chart**; close all or part (lots in the table); **Close all** (asks first). No keyboard shortcuts for trading |
+| On the chart | For the symbol on screen: each position's entry (grey, "#id side lots" plus the last part of its label, e.g. MIR / HMAIN), SL (red), TP (green), each pending order (orange); SL, TP and order lines can be dragged |
+| Tables | Positions (ID, symbol, side, lots, entry, SL, TP, price, pips, P/L in USD, label — "manual" for yours) and pending orders (with Cancel); account bar: balance, equity, open P/L, commission paid |
+| Messages | Broker events (opened, closed, stop-loss / take-profit hit, order placed / moved / filled / cancelled) with replay time, newest first; TM's own pop-ups keep coming through TM's notifications on the desktop |
+| Session | Session list and **New…** (name, start date, balance) in the header (§8) |
 
 ## 6. Replay clock and speed
 
@@ -133,21 +134,23 @@ A 5-minute candle only gives open, high, low, close. Rewind walks each M5 bar th
 
 | Item | Rule |
 |---|---|
-| Account | One account, **USD, hedging** (several positions per symbol, both directions), start balance 5,000 USD, leverage 1:500 (like the IC Markets demo) — values in `~/rewind/config/rewind.json` |
-| Symbols | Details (digits, pip size, lot size, volume step, minimum volume) copied once from the IC Markets demo into `config/symbols.json` |
-| Market order | Buy at the ask, sell at the bid of the current price step |
+| Account | One account per session, **USD, hedging** (several positions per symbol, both directions), start balance 5,000 USD by default (chosen per session), leverage 1:500 shown only — `config/rewind.json` (live copy `~/rewind/config/rewind.json` if present) |
+| Symbols | Details copied from the IC Markets demo (21-Oct-2026) into `config/symbols.json`: digits (5 / 3 / 2 for crypto), pip position, lot size (forex 100,000 units, crypto 1 coin), minimum and step 0.01 lot, maximum |
+| Market order | Buy at the ask, sell at the bid of the current price step. Refused with `MARKET_CLOSED` when the symbol has had no candle for 10 minutes (forex weekend, holidays) |
 | Stop order (TM's hedges) | Buy-stop fills when the ask reaches it, sell-stop when the bid reaches it, **at the order price**; if the price jumped past it between two steps (gap), at the step's price — the slippage of a real jump |
 | Stop-loss / take-profit | Same rule, on the bid for longs and the ask for shorts |
-| Amend / cancel | Immediate; refused with cTrader's error codes where cTrader would refuse (e.g. a stop-loss on the wrong side of the price: `TRADING_BAD_STOPS`) |
-| Commission | Per lot and side, in USD, per symbol (IC Markets Raw: about 3.50 USD per lot per side for forex — **to confirm**, §13); crypto per the broker's rule |
-| P/L in USD | Converted with the replay's own prices (e.g. AUDJPY profit in JPY → USD with USDJPY… needs USDJPY history too, or a fixed rate — §13) |
+| Amend / cancel | Immediate; refused with cTrader's error codes where cTrader would refuse: a stop-loss / take-profit on the wrong side of the price it closes at, or a buy-stop not above the ask / sell-stop not below the bid (`TRADING_BAD_STOPS`); a volume outside minimum / step / maximum (`TRADING_BAD_VOLUME`) |
+| Inside a candle | Fills and hits are checked at each of the 4 price steps (§6.3) in order, so a stop-loss visited before the take-profit wins |
+| Commission | IC Markets' own figures (read from the demo, 21-Oct-2026): forex **30 USD per million USD traded, on opening and on closing** (≈ 3.30 USD per lot per side on EURUSD); BTCUSD and ETHUSD **none** (spread only) |
+| P/L in USD | Converted with the replay's own prices, no extra downloads: GBPUSD = EURUSD ÷ EURGBP, USDJPY = GBPJPY ÷ GBPUSD (mid prices). A fixed rate from `rewind.json` only if one of those symbols has no history |
 | Not simulated | Swap, margin call / stop-out, requotes |
 
 ## 8. Sessions
 
 - A **session** = a starting date, the account, all trades and events, the replay cursor. Saved in `~/rewind/sessions/<name>/` after every change; reopening continues where it stopped (TM, if running, carries on from its own state file).
 - **Go to** a date or **start a new session** only when the account is flat (no positions, no orders). This keeps TM's memory consistent: TM sees its trades closed, not vanished.
-- **Results** per session: `trades.csv` — one row per owner's trade: symbol, side, lots, entry/exit time (replay) and price, result in USD and R, hedge cycles, break-even reached, 2R warning, 3R close, commission; plus `events.csv` with every broker event.
+- Sessions are listed in the header; **New…** asks for a name (letters, digits, `-`, `_`), a start date (UTC) and a balance. The session in use is remembered in `~/rewind/sessions/current.txt`; each folder holds `replay.json`, `levels.json`, `account.json`, `trades.csv`, `events.csv`.
+- **Results** per session, written as things happen: `trades.csv` — one row per closed position or closed part: open / close time (replay), symbol, side, lots, entry, exit, initial stop-loss, pips, **result in R** (against the stop-loss given at opening, so a stop moved further away can lose more than 1R), commission, P/L in USD after commission, close reason (Manual, StopLoss, TakeProfit), position ID, label; and `events.csv` with every broker event. TM's own columns (hedge cycles, break-even, 2R / 3R) come in step 5.
 
 ## 9. TM's side
 
@@ -195,7 +198,7 @@ Each step on the owner's go, each tested before the next.
 |---|---|---|
 | 1 | `rewind-download`: Dukascopy files → monthly M1 / M5 CSV for the six symbols; summary | **Built 20-Oct-2026** — 8 tests; trial week of EURUSD complete (7,186 minutes, no gaps); prices within 0.06 % of IC Markets' for all six symbols; full download running (log in `~/rewind/logs/`). Owner to glance at a few days in Google Sheets |
 | 2 | Chart in the browser: timeframes, scroll, go to, replay cursor, step / play, levels | **Built 21-Oct-2026** — 14 tests (D1/H4 boundaries summer and winter, no candle after the cursor, forming last candle, paging back, weekend in one step, go-to limits, skip targets across the clock changes); tried in the browser: steps, play at 30/s, go to, skips, D1 / M5, a level carried from D1 to M5, scrolling back. Owner replays a known week |
-| 3 | Simulated broker + order panel: manual trades, SL/TP, P/L, commission, sessions, `trades.csv` | Hand-checked trades (fill prices, stop hits, gaps) |
+| 3 | Simulated broker + order panel: manual trades, SL/TP, P/L, commission, sessions, `trades.csv` | **Built 21-Oct-2026** — 10 broker tests (fill at the ask, SL inside a candle at its price and after a gap at the open, SL-before-TP order inside a candle, buy-stop inside a candle and after a gap, refusals, market closed, partial close and JPY profit in USD, flat-only go to, restart); in the browser: buy with SL/TP, SL dragged on the chart, partial close, refusals shown, SL hit while playing, new session refused while a position is open and created when flat. Owner trades a known day |
 | 4 | Open API server + certificate; Trader-side T1–T3 (in the Trader repo) | `Trader.ListAccounts` and then TM connect to Rewind; TM takes over a manual trade, hedges fill and re-hedge on replayed prices |
 | 5 | Exact mode tuning, results CSV with R values, polishing | A full replayed week with TM, results checked against TM's `actions.csv` |
 
@@ -215,8 +218,6 @@ Each step on the owner's go, each tested before the next.
 ## 13. Open questions
 
 - **Spreads:** Dukascopy's own spreads, or fixed per-symbol spreads from the Audit Bot's measurements (closer to the owner's brokers)?
-- **Commission:** exact IC Markets Raw values per symbol (forex and crypto).
-- **USD conversion** of JPY and GBP profits: download USDJPY and GBPUSD as well (two more symbols, conversion only), or a fixed rate per session?
 - **Dukascopy's terms of use** for the data feed: not found online; third parties speak of personal use. Rewind keeps the data private (never in Git); ask Dukascopy if it is ever to be shared.
 - **News pop-ups in replay:** TM's news / Friday pop-ups follow the real clock. Rewind could show its own news markers on the chart from Trader's `news-releases.json` (copied) instead.
 - **More precise replay:** use the M1 files as the price path (20 steps per M5 bar) — when the 4-step guess proves too rough.
@@ -235,3 +236,4 @@ Each step on the owner's go, each tested before the next.
 | v0.1 | 20 Oct 2026 | First draft. Owner's choices: browser app; six symbols; 24 months; 5-minute candles to start; TM runs unchanged on Ubuntu and connects to Rewind like a broker; history downloaded (Dukascopy) by Rewind's own downloader (option c); a completely separate project and repository, copying rather than sharing code with Trader |
 | v0.2 | 20 Oct 2026 | Step 1 built: `rewind-download`. Confirmed file format, URL (month from 00) and price factors (checked against IC Markets). Changed: one download at a time (Dukascopy throttles bursts with HTTP 429), HTTPS only, forex Saturdays skipped, SharpCompress instead of a copied LZMA decoder; history is personal use only |
 | v0.3 | 21 Oct 2026 | Step 2 built: the chart (§5). Decided: H4 and D1 start at 17:00 New York as in cTrader (open question closed); a step moves to the next candle of the symbol on screen; replay position and levels saved in `sessions/default/`; ASP.NET console logging instead of Serilog for now |
+| v0.4 | 21 Oct 2026 | Step 3 built: the simulated broker (§7), order panel, sessions and results files (§8). Decided: commission and symbol details from the IC Markets demo (open question closed); USD conversion from crosses of the six symbols (open question closed); a market closed after 10 minutes without a candle; R measured against the stop-loss given at opening |

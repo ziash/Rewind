@@ -8,6 +8,8 @@
   --level: #f0b90b;
   --up: #26a69a;
   --down: #ef5350;
+  --entry: #9598a1;
+  --order: #ff9800;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: light) {
@@ -51,13 +53,49 @@ button:disabled { opacity: .5; cursor: default; }
 #status { color: var(--muted); margin-left: auto; }
 #status.error { color: var(--down); }
 main { flex: 1; display: flex; min-height: 0; }
-#chart { flex: 1; min-width: 0; position: relative; }
+.work { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#chart { flex: 1; min-height: 200px; position: relative; }
+#chart.dragging, #chart.near-line { cursor: ns-resize; }
+.account { border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.account span { color: var(--muted); }
+.account b { color: var(--text); margin-left: 4px; }
+.account .danger { margin-left: auto; }
+.tables { max-height: 28vh; overflow: auto; padding: 0 12px 6px; background: var(--panel); }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: normal; position: sticky; top: 0; background: var(--panel); }
+td input { width: 84px; padding: 1px 4px; }
+td.lots input { width: 56px; }
+.pos { color: var(--up); }
+.neg { color: var(--down); }
+.danger:hover { border-color: var(--down); color: var(--down); }
+.session { margin-left: auto; }
+.ticket { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+.ticket button { display: flex; flex-direction: column; align-items: center; padding: 6px; color: #fff; border: 0; }
+.ticket button b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.ticket .sell { background: var(--down); }
+.ticket .buy { background: var(--up); }
+.ticket button:disabled { filter: grayscale(1); }
+.fields { display: grid; gap: 6px; }
+.fields label { display: grid; gap: 2px; color: var(--muted); }
+.fields .group input { flex: 1; }
+#events { list-style: none; padding: 0; margin: 0; font-size: 12px; }
+#events li { padding: 3px 0; border-bottom: 1px solid var(--line); }
+#events time { color: var(--muted); margin-right: 4px; font-variant-numeric: tabular-nums; }
+dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 16px; width: min(360px, 92vw); }
+dialog::backdrop { background: rgb(0 0 0 / .5); }
+dialog form { display: grid; gap: 10px; }
+dialog label { display: grid; gap: 2px; color: var(--muted); }
+dialog h2 { margin: 0; font-size: 15px; }
+.right { justify-content: flex-end; }
+.error-text { color: var(--down); margin: 0; min-height: 1em; }
 #chart.picking { cursor: crosshair; }
 aside {
-  width: 220px; padding: 10px 12px; overflow-y: auto;
+  width: 240px; padding: 10px 12px; overflow-y: auto;
   background: var(--panel); border-left: 1px solid var(--line);
 }
-aside h2 { font-size: 13px; margin: 0 0 8px; }
+aside h2 { font-size: 13px; margin: 14px 0 8px; }
+aside h2:first-child { margin-top: 0; }
 aside h2 small { color: var(--muted); font-weight: normal; }
 aside input { width: 100%; min-width: 0; }
 .hint { color: var(--muted); font-size: 12px; }
@@ -71,6 +109,7 @@ aside input { width: 100%; min-width: 0; }
 #levels li button { padding: 0 6px; }
 @media (max-width: 700px) {
   main { flex-direction: column; }
+  .session { margin-left: 0; }
   aside { width: auto; border-left: 0; border-top: 1px solid var(--line); max-height: 30vh; }
   .clock .sub { display: block; margin-left: 0; }
 }

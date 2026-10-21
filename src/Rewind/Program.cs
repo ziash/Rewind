@@ -1,8 +1,11 @@
-// Rewind (docs/spec.md): replays past prices in the browser. Step 2: the chart — timeframes, scroll back, go to,
-// step / play, levels (spec §5, §6). Open http://localhost:5180.
+// Rewind (docs/spec.md): replays past prices in the browser and trades them on a simulated account.
+// Step 2: the chart — timeframes, scroll back, go to, step / play, levels (spec §5, §6).
+// Step 3: the simulated broker and order panel — market orders, SL/TP, P/L, commission, sessions (spec §7, §8).
+// Open http://localhost:5180.
 //
-// Reads ~/rewind/history/<SYMBOL>/*.m5.csv (rewind-download, spec §4); keeps the replay position and levels in
-// ~/rewind/sessions/default/. Listens on localhost only.
+// Reads ~/rewind/history/<SYMBOL>/*.m5.csv (rewind-download, spec §4) and ~/rewind/config/ (symbols.json,
+// rewind.json; the copies next to the program if missing). Each session lives in ~/rewind/sessions/<name>/.
+// Listens on localhost only.
 //
 // Options: --dir <folder> (default ~/rewind), --port <port> (default 5180).
 
@@ -11,6 +14,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Rewind.Broker;
 using Rewind.History;
 using Rewind.Replay;
 
@@ -42,11 +46,17 @@ if (history.Count == 0)
     log.LogError("No history found in {Dir}. Run rewind-download first (spec §4).", Path.Combine(root, "history"));
     return 1;
 }
-var session = Path.Combine(root, "sessions", "default");
-var clock = new ReplayClock(history, Path.Combine(session, "replay.json"));
-var levels = new Levels(Path.Combine(session, "levels.json"));
-var updates = new Updates(clock, history);
+var configDir = Path.Combine(root, "config");
+var specs = ConfigFiles.Symbols(ConfigFiles.Find(configDir, "symbols.json"));
+var config = ConfigFiles.Rewind(ConfigFiles.Find(configDir, "rewind.json"));
+var broker = new SimBroker(history, specs, config);
+var clock = new ReplayClock(history, path: null, broker);
+var levels = new Levels(path: null);
+var sessions = new Sessions(Path.Combine(root, "sessions"), clock, levels, broker);
+var updates = new Updates(clock, history, broker, sessions);
 clock.Changed += updates.Broadcast;
+broker.Changed += () => updates.Broadcast(clock.State, false);
+sessions.OpenLast();
 
 // ---- API -------------------------------------------------------------------------------------------------------
 var api = app.MapGroup("/api");
@@ -59,6 +69,9 @@ api.MapGet("/info", () => new
     clock.MaxUtc,
     ReplayClock.Speeds,
     State = Updates.Describe(clock.State),
+    Specs = specs.Values.Where(s => history.ContainsKey(s.Name)),
+    config.StartBalance,
+    config.Leverage,
 });
 
 api.MapGet("/candles", (string symbol, string tf, long? before, int? count) =>
@@ -77,6 +90,29 @@ api.MapPost("/pause", () => Do(clock.Pause));
 api.MapPost("/goto", (GoToRequest r) => Do(() => clock.GoTo(
     DateTime.SpecifyKind(DateTime.ParseExact(r.Time.Trim().Replace('T', ' '), ["yyyy-MM-dd HH:mm", "yyyy-MM-dd"], CultureInfo.InvariantCulture, DateTimeStyles.None), DateTimeKind.Utc))));
 api.MapPost("/skip", (SkipRequest r) => Do(() => clock.Skip(Enum.Parse<SkipTarget>(r.To, ignoreCase: true))));
+
+// ---- trading (spec §7) and sessions (spec §8) ------------------------------------------------------------------
+api.MapPost("/orders/market", (MarketRequest r) => Trade(() =>
+{
+    var spec = specs.GetValueOrDefault(r.Symbol) ?? throw new BrokerException("SYMBOL_NOT_FOUND", $"Unknown symbol {r.Symbol}");
+    broker.MarketOrder(r.Symbol, r.Side == "buy" ? 1 : r.Side == "sell" ? -1 : throw new BrokerException("BAD_SIDE", "side must be buy or sell"),
+        spec.Volume(r.Lots), r.StopLoss, r.TakeProfit);
+}));
+api.MapPost("/positions/{id:long}/protection", (long id, ProtectionRequest r) => Trade(() => broker.AmendPosition(id, r.StopLoss, r.TakeProfit)));
+api.MapPost("/positions/{id:long}/close", (long id, CloseRequest r) => Trade(() =>
+{
+    broker.ClosePosition(id, r.Lots is { } lots ? VolumeOf(id, lots) : null);
+}));
+api.MapPost("/positions/close-all", () => Trade(broker.CloseAll));
+api.MapPost("/orders/{id:long}/amend", (long id, AmendRequest r) => Trade(() => broker.AmendOrder(id, r.Price)));
+api.MapDelete("/orders/{id:long}", (long id) => Trade(() => broker.CancelOrder(id)));
+api.MapGet("/account", broker.Snapshot);
+
+api.MapGet("/sessions", () => new { sessions.Current, All = sessions.List() });
+api.MapPost("/sessions", (NewSessionRequest r) => Do(() => sessions.Create(r.Name,
+    DateTime.SpecifyKind(DateTime.ParseExact(r.Start.Trim().Replace('T', ' '), ["yyyy-MM-dd HH:mm", "yyyy-MM-dd"], CultureInfo.InvariantCulture, DateTimeStyles.None), DateTimeKind.Utc),
+    r.Balance)));
+api.MapPost("/sessions/open", (OpenSessionRequest r) => Do(() => sessions.Switch(r.Name)));
 
 api.MapGet("/levels", (string symbol) => levels.For(symbol));
 api.MapPost("/levels", (LevelRequest r) => history.ContainsKey(r.Symbol) ? Results.Ok(levels.Add(r.Symbol, r.Price, r.Note ?? "")) : Results.NotFound());
@@ -102,6 +138,25 @@ log.LogInformation("Rewind on http://localhost:{Port} — replay at {Cursor:yyyy
 await app.RunAsync();
 return 0;
 
+long VolumeOf(long positionId, double lots)
+{
+    var symbol = broker.PositionSymbol(positionId);
+    return specs[symbol].Volume(lots);
+}
+
+static IResult Trade(Action action)
+{
+    try
+    {
+        action();
+        return Results.NoContent();
+    }
+    catch (BrokerException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message, code = ex.Code });
+    }
+}
+
 static IResult Do(Action action)
 {
     try
@@ -120,12 +175,18 @@ record PlayRequest(int Speed);
 record GoToRequest(string Time);
 record SkipRequest(string To);
 record LevelRequest(string Symbol, double Price, string? Note);
+record MarketRequest(string Symbol, string Side, double Lots, double? StopLoss, double? TakeProfit);
+record ProtectionRequest(double? StopLoss, double? TakeProfit);
+record CloseRequest(double? Lots);
+record AmendRequest(double Price);
+record NewSessionRequest(string Name, string Start, double? Balance);
+record OpenSessionRequest(string Name);
 
 /// <summary>
 /// Pushes every replay change to the open browser pages over a WebSocket: the cursor, play state, and the latest
 /// (possibly still forming) candle of the symbol and timeframe on screen — or "reload" after a jump or view change.
 /// </summary>
-sealed class Updates(ReplayClock clock, IReadOnlyDictionary<string, SymbolHistory> history)
+sealed class Updates(ReplayClock clock, IReadOnlyDictionary<string, SymbolHistory> history, SimBroker broker, Sessions sessions)
 {
     private static readonly TimeZoneInfo London = TimeZoneInfo.FindSystemTimeZoneById("Europe/London");
     private static readonly TimeZoneInfo NewYork = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
@@ -157,7 +218,7 @@ sealed class Updates(ReplayClock clock, IReadOnlyDictionary<string, SymbolHistor
     public void Broadcast(ReplayState s, bool reload)
     {
         var last = reload ? null : Timeframes.Candles(history[s.Symbol], s.Timeframe, s.CursorUtc, DateTime.MaxValue, 1).Select(ToJson).FirstOrDefault();
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(new { state = Describe(s), reload, candle = last }, Json);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new { state = Describe(s), reload, candle = last, account = broker.Snapshot(), session = sessions.Current }, Json);
         List<(WebSocket Socket, SemaphoreSlim Gate)> sockets;
         lock (_lock)
             sockets = _sockets.ToList();
@@ -190,7 +251,7 @@ sealed class Updates(ReplayClock clock, IReadOnlyDictionary<string, SymbolHistor
             _sockets.Add(entry);
         try
         {
-            var hello = JsonSerializer.SerializeToUtf8Bytes(new { state = Describe(clock.State), reload = false, candle = (object?)null }, Json);
+            var hello = JsonSerializer.SerializeToUtf8Bytes(new { state = Describe(clock.State), reload = false, candle = (object?)null, account = broker.Snapshot(), session = sessions.Current }, Json);
             await SendAsync(socket, entry.Item2, hello);
             var buffer = new byte[256];
             while (socket.State == WebSocketState.Open && !ct.IsCancellationRequested)
