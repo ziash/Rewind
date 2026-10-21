@@ -4,8 +4,8 @@
 
 | Item | Value |
 |---|---|
-| Status | **Steps 1–4 built** (history downloader 20-Oct-2026; chart, simulated broker and TM connection 21-Oct-2026); step 5 not started (§11) |
-| Document version | v0.5 (21-Oct-2026) — history in §15 |
+| Status | **Steps 1–5 built** (history downloader 20-Oct-2026; chart, simulated broker and TM connection 21-Oct-2026; exact mode and TM's results 22-Oct-2026) — §11 |
+| Document version | v0.6 (22-Oct-2026) — history in §15 |
 | Owner | Zeeshan |
 | Repository | [github.com/ziash/Rewind](https://github.com/ziash/Rewind) (private) — separate from [Trader](https://github.com/ziash/Trader) |
 | Runs on | The Ubuntu laptop; browser GUI at `http://localhost:5180`; the broker side at `localhost:5036` |
@@ -77,7 +77,7 @@ Rewind's own downloader, **`rewind-download`** (a small C# console program in th
 | Output | `~/rewind/history/<SYMBOL>/<yyyy-MM>.m1.csv.gz` (compressed) and `<yyyy-MM>.m5.csv` — one file per month |
 | CSV columns | `time_utc, bid_open, bid_high, bid_low, bid_close, ask_open, ask_high, ask_low, ask_close, volume` (volume = the bid side's, in Dukascopy's units) — same CSV rules as the Trader project (UTF-8, `.` decimals, UTC times as `yyyy-MM-dd HH:mm:ss`, opens in Google Sheets) |
 | Check | After each run: a summary per symbol (days, candles, price range, gaps over 1 hour — for forex outside the weekend close —, spread at close: smallest / median / 99 % / largest). Exit code 1 if days are missing |
-| Run | `rewind-download` (all), `--from` / `--to` / `--symbols` for a part, `--build-only` to rebuild the CSV files from the cache, `--interval-ms` for the pause. Code: `src/Rewind.Download`; tests: `tests/Rewind.Download.Tests` (two real day files as samples) |
+| Run | `rewind-download` (all), `--from` / `--to` / `--symbols` for a part, `--build-only` to rebuild the CSV files from the cache, `--interval-ms` for the pause. Built into its own folder, `~/rewind/bin/download/`, so rebuilding the repo never disturbs a running download (README). Code: `src/Rewind.Download`; tests: `tests/Rewind.Download.Tests` (two real day files as samples) |
 
 Things to know:
 - Dukascopy's prices are **very close to, not identical with**, IC Markets' or Pepperstone's — fine for practising and for testing TM's behaviour. Their spreads also differ; Rewind can instead use **fixed spreads per symbol** (e.g. the medians the Audit Bot measured) — decision in §13.
@@ -120,11 +120,17 @@ The broker side (fills of TM's stop orders, stop-losses, take-profits) is exact 
 
 | Mode | How it plays | TM |
 |---|---|---|
-| **Exact** (default while any position is open) | Each price step stays at least 1.2 s on screen | Has seen every step: same result as live |
+| **Exact** (the default; switch in the footer) | A price step of a symbol **with an open position or pending order** waits until TM has had its turn (rule below); every other price step goes at the speed setting | Has seen every step of its trades: same result as live |
 | **Fast** | As fast as the speed setting | May act late — like a fast real market |
-| Flat account | Always as fast as the speed setting | Nothing to manage |
+| Flat account, or no TM connected | Always as fast as the speed setting | Nothing to manage |
 
-Speed setting: 1, 2, 5, 10, 30, 60 M5 bars per second (Fast mode); a step is always possible.
+Speed setting: 1, 2, 5, 10, 30, 60 M5 bars per second; a step is always possible.
+
+Exact mode in detail (built in step 5):
+- **TM's turn:** after such a price step, Rewind waits at least **1.2 s** (`exactStepSeconds` in `rewind.json`: TM looks once a second, plus a margin) **and** until TM has sent nothing for **0.3 s** (its orders of that look are all answered), but never more than **5 s** per step. A candle of a symbol in a trade therefore takes about 5 s (4 steps); a day with an open trade about 25 minutes; flat stretches go at full speed.
+- Applies to **Step** and **Play** alike; **Pause** takes effect at the end of the candle being walked (the remaining steps still wait for TM). The **skips** (next day / London / New York) are not paced: TM may act late there, as in Fast mode.
+- While a candle is paced, the page draws it **step by step** (the forming candle grows, the prices, P/L and TM's orders move with it), and the footer shows "Exact: waiting for TM".
+- Only symbols with exposure are paced, so TM on EURUSD does not slow down the other five symbols' steps in the same 5 minutes.
 
 ### 6.3 Price path inside a candle
 
@@ -150,7 +156,26 @@ A 5-minute candle only gives open, high, low, close. Rewind walks each M5 bar th
 - A **session** = a starting date, the account, all trades and events, the replay cursor. Saved in `~/rewind/sessions/<name>/` after every change; reopening continues where it stopped (TM, if running, carries on from its own state file).
 - **Go to** a date or **start a new session** only when the account is flat (no positions, no orders). This keeps TM's memory consistent: TM sees its trades closed, not vanished.
 - Sessions are listed in the header; **New…** asks for a name (letters, digits, `-`, `_`), a start date (UTC) and a balance. The session in use is remembered in `~/rewind/sessions/current.txt`; each folder holds `replay.json`, `levels.json`, `account.json`, `trades.csv`, `events.csv`.
-- **Results** per session, written as things happen: `trades.csv` — one row per closed position or closed part: open / close time (replay), symbol, side, lots, entry, exit, initial stop-loss, pips, **result in R** (against the stop-loss given at opening, so a stop moved further away can lose more than 1R), commission, P/L in USD after commission, close reason (Manual, StopLoss, TakeProfit), position ID, label; and `events.csv` with every broker event. TM's own columns (hedge cycles, break-even, 2R / 3R) come in step 5.
+- **Results** per session, written as things happen: `trades.csv` — one row per closed position or closed part: open / close time (replay), symbol, side, lots, entry, exit, initial stop-loss, pips, **result in R** (against the stop-loss given at opening, so a stop moved further away can lose more than 1R), commission, P/L in USD after commission, close reason (Manual — by the owner in the browser —, Tm — over the Open API, i.e. by TM —, StopLoss, TakeProfit), position ID, label; and `events.csv` with every broker event.
+- **TM results** (step 5): `tm-trades.csv` — **one row per leg** (the owner's main, and TM's mirror) once the leg and its hedge are both closed, measured by Rewind from its own fills with **TM's formulas** (tm.md §1, §5): 1R = |H − leg entry|, H = the leg's first hedge order; a leg's loss = its own open P/L + its open hedge + its earlier hedges, per unit of price.
+
+| Column | Meaning |
+|---|---|
+| `trade` | P + the main's position ID (as in TM's `actions.csv`) |
+| `leg` | MAIN or MIR |
+| `symbol`, `side`, `lots` | of the leg (lots at opening) |
+| `open_time_utc`, `close_time_utc` | replay times |
+| `entry`, `hedge_level`, `r_pips` | E, H and 1R in pips |
+| `exit` | the leg's close price (volume-weighted if closed in parts) |
+| `hedge_cycles` | how many times its hedge filled |
+| `hedges_r` | result of all its hedges together, in R |
+| `break_even` | `yes` if its stop-loss was moved to its entry (TM's 1R rule) |
+| `max_loss_r` | the largest loss the leg reached, in R (TM warns at 2R and closes at 3R) |
+| `closed_by` | owner, TM (TM closes a leg only under its 3R rule), stop-loss, take-profit |
+| `result_r` | leg + its hedges, in R, before commission |
+| `commission_usd`, `pnl_usd` | leg + its hedges, in USD; P/L after commission |
+
+- Unfinished legs are remembered in `tm-open.json` in the session folder, so a restart of Rewind continues them (the largest loss reached between the last fill and the restart may be missed). Manual positions TM never touched get no row. Check after a run: hedge cycles, break-even and 3R closes against TM's `actions.csv` and `events.csv` (HedgeFilled, BreakEven, LossWarning, LossLimit).
 
 ## 9. TM's side
 
@@ -164,7 +189,7 @@ TM's **code is not changed**. Three small, opt-in changes were planned in the **
 
 On the Rewind side, for TM (made by Rewind on its first start; never overwritten):
 - `~/rewind/tm/secrets.env` (mode 600) — `CTRADER_ENV=replay`, `CTRADER_HOST=localhost`, `CTRADER_PORT=5036`, and **fake** client ID, secret and tokens. Rewind checks the client ID and secret, and accepts any token it could have issued (`rewind-…`); they are worthless anywhere else. Rewind answers token refreshes with new fake tokens, which TM writes back into *this* file.
-- `~/rewind/tm/tm.json` — TM's config for Rewind: the account **9000001** (broker name `rewind`) and the symbols with history; TM's rule values stay at their defaults (copy any you want to change in here).
+- `~/rewind/tm/tm.json` — TM's config for Rewind: the account **9000001** (broker name `rewind`) and the symbols with history; TM's rule values stay at their defaults (copy any you want to change in here). Never rewritten; Rewind's log says when it misses symbols that have history (add them to `"symbols"`).
 - `~/rewind/tm/run-tm.sh` — sets `TRADER_SECRETS_FILE` and `SSL_CERT_FILE` and starts TM from `~/code/Trader` (`TRADER_REPO` overrides) with `--config-dir ~/rewind/tm`.
 - `~/rewind/certs/` — `server.pfx` (Rewind's certificate for localhost, mode 600), `ca.pem` (Rewind's local authority; its private key is never stored), `bundle.pem` (system certificates + `ca.pem`).
 - The header of the page shows **TM on / TM off** (a TM connected to the Open API).
@@ -206,11 +231,11 @@ Each step on the owner's go, each tested before the next.
 
 | Step | Content | Test |
 |---|---|---|
-| 1 | `rewind-download`: Dukascopy files → monthly M1 / M5 CSV for the six symbols; summary | **Built 20-Oct-2026** — 8 tests; trial week of EURUSD complete (7,186 minutes, no gaps); prices within 0.06 % of IC Markets' for all six symbols; full download running (log in `~/rewind/logs/`). Owner to glance at a few days in Google Sheets |
+| 1 | `rewind-download`: Dukascopy files → monthly M1 / M5 CSV for the six symbols; summary | **Built 20-Oct-2026** — 8 tests; trial week of EURUSD complete (7,186 minutes, no gaps); prices within 0.06 % of IC Markets' for all six symbols; full download done 21-Oct-2026: 8,120 files, all six symbols 1-Oct-2024 → 19-Oct-2026 (log in `~/rewind/logs/`). Owner to glance at a few days in Google Sheets |
 | 2 | Chart in the browser: timeframes, scroll, go to, replay cursor, step / play, levels | **Built 21-Oct-2026** — 14 tests (D1/H4 boundaries summer and winter, no candle after the cursor, forming last candle, paging back, weekend in one step, go-to limits, skip targets across the clock changes); tried in the browser: steps, play at 30/s, go to, skips, D1 / M5, a level carried from D1 to M5, scrolling back. Owner replays a known week |
 | 3 | Simulated broker + order panel: manual trades, SL/TP, P/L, commission, sessions, `trades.csv` | **Built 21-Oct-2026** — 10 broker tests (fill at the ask, SL inside a candle at its price and after a gap at the open, SL-before-TP order inside a candle, buy-stop inside a candle and after a gap, refusals, market closed, partial close and JPY profit in USD, flat-only go to, restart); in the browser: buy with SL/TP, SL dragged on the chart, partial close, refusals shown, SL hit while playing, new session refused while a position is open and created when flat. Owner trades a known day |
 | 4 | Open API server + certificate; Trader-side T1–T3 (in the Trader repo) | **Built 21-Oct-2026** — 5 end-to-end tests over TLS (wrong secret refused; market order accepted + filled under its ID with the relative stop-loss and real-time opening; refusal as order error; stop order filled for every client while the replay moves, spots at each step; past candles moved into real time). Live: `Trader.ListAccounts` listed account 9000001; **TM unchanged** took over a manual EURUSD sell (mirror, both hedges at the stop-loss, stop-losses removed), then on replayed prices: hedges filled at H, hedge stops at ½R, stops hit, re-hedge, 2R warning; after Close all its state was empty |
-| 5 | Exact mode tuning, results CSV with R values, polishing | A full replayed week with TM, results checked against TM's `actions.csv` |
+| 5 | Exact mode (§6.2), TM results `tm-trades.csv` (§8), polishing | **Built 22-Oct-2026** — 9 tests (waits only after the steps of a symbol in a trade, a pending order counts, no wait when flat / without TM / in Fast mode / on skips, waits for TM's quiet but at most 5 s, the page and TM's orders are not held up by a paced step, pause ends the candle; legs: hedge cycle + owner close + TM close, break-even then stop at entry, hedges moved before a fill change 1R, partial closes averaged, a restart keeps open legs, untouched positions get no row). Live: TM unchanged on **17–21 Mar 2025** (session `step5-week`): 11 trades on EURUSD, GBPJPY and BTCUSD, 45 minutes for the week; TM sent 150 orders, all accepted; **all 22 legs of `tm-trades.csv` match TM's own logs** — hedge cycles (0–5 per leg), break-even, 2R warnings and one 3R close by TM. Polishing: the downloader builds into its own folder (a rebuild had stopped the first run while it built the CSVs); Rewind warns when TM's `tm.json` misses symbols that have history |
 
 ## 12. Technology
 
@@ -230,7 +255,6 @@ Each step on the owner's go, each tested before the next.
 - **Spreads:** Dukascopy's own spreads, or fixed per-symbol spreads from the Audit Bot's measurements (closer to the owner's brokers)?
 - **Dukascopy's terms of use** for the data feed: not found online; third parties speak of personal use. Rewind keeps the data private (never in Git); ask Dukascopy if it is ever to be shared.
 - **News pop-ups in replay:** TM's news / Friday pop-ups follow the real clock. Rewind could show its own news markers on the chart from Trader's `news-releases.json` (copied) instead.
-- **TM's speed in replay:** TM looks once a second; while playing fast it acts late (step 5: exact mode keeps each price step 1.2 s while positions are open).
 - **TM's files in ~/tradebot:** TM writes its replay state and logs under Trader's folders (`run/tm/rewind-9000001.json`, `logs/rewind/`), apart from the demo accounts. Accepted for now.
 - **More precise replay:** use the M1 files as the price path (20 steps per M5 bar) — when the 4-step guess proves too rough.
 - **Two accounts** (an IC Markets-like and a Pepperstone-like one, different spreads/commission) — later, if useful.
@@ -250,3 +274,4 @@ Each step on the owner's go, each tested before the next.
 | v0.3 | 21 Oct 2026 | Step 2 built: the chart (§5). Decided: H4 and D1 start at 17:00 New York as in cTrader (open question closed); a step moves to the next candle of the symbol on screen; replay position and levels saved in `sessions/default/`; ASP.NET console logging instead of Serilog for now |
 | v0.4 | 21 Oct 2026 | Step 3 built: the simulated broker (§7), order panel, sessions and results files (§8). Decided: commission and symbol details from the IC Markets demo (open question closed); USD conversion from crosses of the six symbols (open question closed); a market closed after 10 minutes without a candle; R measured against the stop-loss given at opening |
 | v0.5 | 21 Oct 2026 | Step 4 built: Rewind's Open API server (§10), certificate and TM's files (§9). Trader side: T1 built (Trader open-code-pieces v1.2), T2 already existed, T3 needs no code (`SSL_CERT_FILE` confirmed). TM ran unchanged on replayed prices |
+| v0.6 | 22 Oct 2026 | Step 5 built: exact mode waits for TM only on symbols in a trade and only while TM is connected (1.2 s, then 0.3 s of quiet, at most 5 s per price step; open question closed); TM results per leg in `tm-trades.csv`; trades closed over the Open API marked `Tm`. A replayed week with TM matched TM's own logs leg for leg. Full history of all six symbols in place (1-Oct-2024 → 19-Oct-2026) |

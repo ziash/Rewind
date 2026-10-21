@@ -64,6 +64,11 @@ public sealed class OpenApiServer
         get { lock (_lock) return _connections.Count; }
     }
 
+    private long _lastRequestTicks;
+
+    /// <summary>When a client last sent a request, or had it answered (heartbeats not counted): exact mode waits for quiet (spec §6.2).</summary>
+    public DateTime LastRequestUtc => new(Interlocked.Read(ref _lastRequestTicks), DateTimeKind.Utc);
+
     /// <summary>A TM (or other client) connected or disconnected.</summary>
     public event Action? ConnectionsChanged;
 
@@ -372,6 +377,7 @@ public sealed class OpenApiServer
             var message = Protocol.Decode(envelope);
             if (message is null or ProtoHeartbeatEvent)
                 return;
+            Interlocked.Exchange(ref server._lastRequestTicks, DateTime.UtcNow.Ticks);
             try
             {
                 foreach (var reply in Answer(message))
@@ -384,6 +390,10 @@ public sealed class OpenApiServer
             catch (RequestException ex)
             {
                 Send(new ProtoOAErrorRes { ErrorCode = ex.Code, Description = ex.Message }, id);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref server._lastRequestTicks, DateTime.UtcNow.Ticks);
             }
         }
 
@@ -497,7 +507,7 @@ public sealed class OpenApiServer
                     return Trade(() => server._broker.AmendPosition(r.PositionId, r.HasStopLoss ? r.StopLoss : null, r.HasTakeProfit ? r.TakeProfit : null));
                 case ProtoOAClosePositionReq r:
                     Account(r.CtidTraderAccountId);
-                    return Trade(() => server._broker.ClosePosition(r.PositionId, r.Volume));
+                    return Trade(() => server._broker.ClosePosition(r.PositionId, r.Volume, CloseReason.Tm));
                 default:
                     server._log($"Open API: {m.GetType().Name} is not supported by Rewind");
                     throw new RequestException("UNSUPPORTED_MESSAGE", $"Rewind does not support {m.GetType().Name} (spec §10)");

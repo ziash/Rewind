@@ -21,12 +21,12 @@ Standing instructions for Claude Code in this repository. Read this first, then 
 - Never change files in `~/code/Trader` or `~/tradebot/` from this project. The Trader-side changes of spec §9 (T1–T3) are done (Trader open-code-pieces v1.2); any further one is made in the Trader repository, under its own rules (its CLAUDE.md), on the owner's go.
 - Testing with TM: stop it by its exact PID (find it by its connection: `ss -tnp 'dport = :5036'`); a `pgrep -f`/`pkill -f` pattern can match the shell running it. Leave the Rewind account flat afterwards.
 - Do not stop, restart or redeploy Trader's services (`trader-auditbot`, `trader-tm`, `trader-auditreport`).
-- Rewind never connects to cTrader or any broker. The only outside access is the Dukascopy download (spec §4): at most 4 requests at a time, resume, no re-downloading.
+- Rewind never connects to cTrader or any broker. The only outside access is the Dukascopy download (spec §4): one request at a time, resume, no re-downloading. Run the downloader from its own build folder `~/rewind/bin/download/` (README): rebuilding the repo while it runs from `src/…/bin` broke a run once.
 
 ## Tech stack and conventions
 
 - C#, .NET 10 LTS, nullable on, warnings as errors where practical; one solution `Rewind.sln`; source in `src/`, tests in `tests/`.
-- Serilog with UTC timestamps. CSV files follow the Trader CSV rules (UTF-8, comma, `.` decimals, UTC `yyyy-MM-dd HH:mm:ss`, `_utc` / unit suffixes in column names).
+- ASP.NET console logging with UTC timestamps (spec §12). CSV files follow the Trader CSV rules (UTF-8, comma, `.` decimals, UTC `yyyy-MM-dd HH:mm:ss`, `_utc` / unit suffixes in column names).
 - Runtime data in `~/rewind/` (`history/`, `sessions/`, `config/`, `certs/`, `tm/`); reference copies of config files in the repo's `config/`.
 - Browser page: plain HTML/JS, Lightweight Charts copied into the repo at a fixed version (keep its attribution).
 

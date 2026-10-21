@@ -49,8 +49,8 @@ public sealed class AccountState
     public List<PendingOrder> Orders { get; set; } = [];
 }
 
-/// <summary>Why a position (or part) closed.</summary>
-public enum CloseReason { Manual, StopLoss, TakeProfit }
+/// <summary>Why a position (or part) closed: Manual = by the owner in the browser, Tm = over the Open API (by TM).</summary>
+public enum CloseReason { Manual, StopLoss, TakeProfit, Tm }
 
 public enum EventKind { PositionOpened, PositionClosed, PositionReduced, ProtectionChanged, OrderPlaced, OrderAmended, OrderCancelled, OrderFilled }
 

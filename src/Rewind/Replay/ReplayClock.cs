@@ -3,8 +3,9 @@ using Rewind.History;
 
 namespace Rewind.Replay;
 
-/// <summary>What the browser shows and where the replay stands; saved in sessions/default/replay.json (spec §5, §6, §8).</summary>
-public sealed record ReplayState(DateTime CursorUtc, string Symbol, Timeframe Timeframe, int Speed, bool Playing = false);
+/// <summary>What the browser shows and where the replay stands; saved in the session's replay.json (spec §5, §6, §8).
+/// <paramref name="Exact"/>: wait for TM after the price steps of symbols in a trade (spec §6.2); false = Fast.</summary>
+public sealed record ReplayState(DateTime CursorUtc, string Symbol, Timeframe Timeframe, int Speed, bool Playing = false, bool Exact = true);
 
 /// <summary>Where a skip jumps to (spec §5): next trading day (17:00 New York), next London or New York open (08:00 local, weekdays).</summary>
 public enum SkipTarget { Day, London, NewYork }
@@ -12,7 +13,8 @@ public enum SkipTarget { Day, London, NewYork }
 /// <summary>
 /// The replay cursor (spec §6): the moment in the past the replay is at. Everything after it is hidden. All symbols share
 /// it; stepping moves to the end of the next 5-minute candle of the symbol on screen, so a forex weekend is one step.
-/// Thread-safe: commands come from web requests, the play loop runs on its own.
+/// Thread-safe: commands come from web requests, the play loop runs on its own. Moves of the cursor take turns (a paced
+/// step can take seconds); reading the state never waits for them.
 /// </summary>
 public sealed class ReplayClock
 {
@@ -25,6 +27,7 @@ public sealed class ReplayClock
     private readonly IReadOnlyDictionary<string, SymbolHistory> _history;
     private string? _path;
     private readonly Lock _lock = new();
+    private readonly Lock _moveLock = new(); // one move of the cursor at a time (step, go to, skip, session change)
     private readonly Lock _saveLock = new(); // one write at a time: two quick clicks must not race on the temp file
     private ReplayState _state;
 
@@ -45,9 +48,23 @@ public sealed class ReplayClock
     /// <summary>The broker that walks the prices as the cursor moves (step 3); none in the chart-only tests.</summary>
     public IMarket? Market { get; }
 
+    /// <summary>Exact mode's wait for TM (spec §6.2); none until the Open API server is up, and in tests that do not need it.</summary>
+    public Pacer? Pacer { get; set; }
+
+    /// <summary>A price step exact mode is waiting on (the page draws it, spec §6.2). Not raised for unpaced steps.</summary>
+    public event Action<PriceStep>? Paced;
+
+    /// <summary>Runs <paramref name="action"/> while no step, go to or skip is under way (session changes, spec §8).</summary>
+    public void Exclusive(Action action)
+    {
+        lock (_moveLock)
+            action();
+    }
+
     /// <summary>Switches to another session's replay.json (spec §8); <paramref name="startUtc"/> for a new session.</summary>
     public void Open(string path, DateTime? startUtc = null)
     {
+        lock (_moveLock)
         lock (_lock)
         {
             _state = Initial(path, startUtc);
@@ -62,7 +79,7 @@ public sealed class ReplayClock
         var first = _history.Keys.Contains("EURUSD") ? "EURUSD" : _history.Keys.First();
         var current = _path is null ? null : _state;
         if (startUtc is { } start)
-            return new ReplayState(Clamp(start), current?.Symbol ?? first, current?.Timeframe ?? Timeframe.M5, current?.Speed ?? Speeds[2]);
+            return new ReplayState(Clamp(start), current?.Symbol ?? first, current?.Timeframe ?? Timeframe.M5, current?.Speed ?? Speeds[2], Exact: current?.Exact ?? true);
         return Load(path) is { } saved && _history.ContainsKey(saved.Symbol)
             ? saved with { Playing = false, CursorUtc = Clamp(saved.CursorUtc) }
             : new ReplayState(Clamp(MinUtc.AddDays(83)), first, Timeframe.M5, Speeds[2]);
@@ -80,39 +97,66 @@ public sealed class ReplayClock
     public void SetView(string symbol, Timeframe tf) => Update(s =>
         _history.ContainsKey(symbol) ? s with { Symbol = symbol, Timeframe = tf } : throw new ArgumentException($"No history for {symbol}"), reload: true);
 
-    /// <summary>One 5-minute candle of the symbol on screen. Returns false at the end of the history.</summary>
+    /// <summary>
+    /// One 5-minute candle of the symbol on screen. Returns false at the end of the history. In exact mode each price step of
+    /// a symbol in a trade waits for TM (spec §6.2), so this can take seconds; a pause meanwhile stops after this candle.
+    /// </summary>
     public bool Step()
     {
-        var moved = false;
-        Update(s =>
+        lock (_moveLock)
         {
+            var s = State;
             var h = _history[s.Symbol];
             var next = h.RevealedCount(s.CursorUtc);
             if (next >= h.Bars.Length)
-                return s with { Playing = false };
-            moved = true;
-            Market?.AdvanceTo(s.CursorUtc, h.Bars[next].EndUtc);
-            return s with { CursorUtc = h.Bars[next].EndUtc };
-        }, reload: false);
-        return moved;
+            {
+                Update(x => x with { Playing = false }, reload: false);
+                return false;
+            }
+            var to = h.Bars[next].EndUtc;
+            Market?.AdvanceTo(s.CursorUtc, to, AfterStep);
+            Update(x => x with { CursorUtc = to }, reload: false);
+            return true;
+        }
+    }
+
+    private void AfterStep(PriceStep step)
+    {
+        if (!State.Exact || Pacer is not { } pacer || !pacer.Applies(step.Symbol))
+            return;
+        Paced?.Invoke(step);
+        pacer.Wait();
     }
 
     /// <summary>Jumps anywhere in the history; with a broker only while the account is flat (spec §8).</summary>
-    public void GoTo(DateTime utc) => Update(s =>
+    public void GoTo(DateTime utc)
     {
-        var to = Clamp(utc);
-        Market?.JumpTo(to);
-        return s with { CursorUtc = to, Playing = false };
-    }, reload: true);
+        lock (_moveLock)
+        {
+            var to = Clamp(utc);
+            Market?.JumpTo(to);
+            Update(s => s with { CursorUtc = to, Playing = false }, reload: true);
+        }
+    }
 
-    /// <summary>Moves forward to the next day / London / New York open; open positions live through every price on the way.</summary>
-    public void Skip(SkipTarget target) => Update(s =>
+    /// <summary>
+    /// Moves forward to the next day / London / New York open; open positions live through every price on the way.
+    /// Never paced (spec §6.2): TM may act late here.
+    /// </summary>
+    public void Skip(SkipTarget target)
     {
-        var to = Clamp(Next(target, s.CursorUtc));
-        if (to > s.CursorUtc)
-            Market?.AdvanceTo(s.CursorUtc, to);
-        return s with { CursorUtc = to };
-    }, reload: true);
+        lock (_moveLock)
+        {
+            var from = State.CursorUtc;
+            var to = Clamp(Next(target, from));
+            if (to > from)
+                Market?.AdvanceTo(from, to);
+            Update(s => s with { CursorUtc = to }, reload: true);
+        }
+    }
+
+    /// <summary>Exact (wait for TM, spec §6.2) or Fast.</summary>
+    public void SetExact(bool exact) => Update(s => s with { Exact = exact }, reload: false);
 
     public void Play(int speed) => Update(s => s with { Playing = true, Speed = Speeds.Contains(speed) ? speed : s.Speed }, reload: false);
 

@@ -13,7 +13,8 @@ public readonly record struct Quote(double Bid, double Ask, DateTime TimeUtc, bo
 /// low → close for a falling one, bid and ask each along their own candle. At every step it fills stop orders and hits
 /// stop-losses and take-profits: at their price when the price moved there within the candle, at the step's price when it
 /// jumped past them (a gap at the candle's open). Market orders fill at the current ask (buy) or bid (sell).
-/// Thread-safe: one lock for everything.
+/// Thread-safe: one lock for everything; while the replay walks, the lock is let go between price steps, so requests (TM's
+/// orders in exact mode, spec §6.2) land between two steps as they would between two ticks.
 /// </summary>
 public sealed class SimBroker : IMarket
 {
@@ -28,6 +29,7 @@ public sealed class SimBroker : IMarket
     private readonly List<BrokerEvent> _recent = [];
     private AccountState _account = new();
     private Journal? _journal;
+    private TmResults? _tm;
     private string? _path;
     private DateTime _now;
 
@@ -58,11 +60,13 @@ public sealed class SimBroker : IMarket
         lock (_lock)
         {
             _journal?.Dispose();
+            _tm?.Dispose();
             _path = dir is null ? null : Path.Combine(dir, "account.json");
             _account = _path is not null && File.Exists(_path)
                 ? JsonSerializer.Deserialize<AccountState>(File.ReadAllText(_path)) ?? new AccountState()
                 : new AccountState { Balance = startBalance ?? _config.StartBalance, StartBalance = startBalance ?? _config.StartBalance };
             _journal = dir is null ? null : new Journal(dir);
+            _tm = dir is null ? null : new TmResults(dir, _specs, FindOpen);
             _recent.Clear();
             SetQuotes(cursorUtc);
             Save();
@@ -85,24 +89,57 @@ public sealed class SimBroker : IMarket
         }
     }
 
-    /// <summary>Walks every candle of every symbol that finishes after <paramref name="fromUtc"/> and by <paramref name="toUtc"/>, in time order.</summary>
-    public void AdvanceTo(DateTime fromUtc, DateTime toUtc)
+    /// <summary>
+    /// Walks every candle of every symbol that finishes after <paramref name="fromUtc"/> and by <paramref name="toUtc"/>, in
+    /// time order, 4 price steps each (spec §6.3). <paramref name="afterStep"/> is called after each step outside the lock,
+    /// so it may wait (exact mode, spec §6.2) while requests come in.
+    /// </summary>
+    public void AdvanceTo(DateTime fromUtc, DateTime toUtc, Action<PriceStep>? afterStep = null)
     {
+        List<(string Symbol, Bar Bar)> bars;
+        lock (_lock)
+            bars = _history.Values
+                .SelectMany(h => h.Bars.Skip(h.RevealedCount(fromUtc)).Take(h.RevealedCount(toUtc) - h.RevealedCount(fromUtc)).Select(b => (h.Symbol.Name, Bar: b)))
+                .OrderBy(x => x.Bar.TimeUtc)
+                .ToList();
+        foreach (var (symbol, bar) in bars)
+        {
+            var path = PricePath(bar);
+            for (var i = 0; i < path.Length; i++)
+            {
+                lock (_lock)
+                {
+                    var t = bar.TimeUtc + TimeSpan.FromTicks(Bar.Length.Ticks * i / (path.Length - 1));
+                    _now = t;
+                    _quotes[symbol] = new Quote(path[i].Bid, path[i].Ask, t, true);
+                    QuoteChanged?.Invoke(symbol, _quotes[symbol]);
+                    var changed = Trigger(symbol, path[i].Bid, path[i].Ask, gap: i == 0);
+                    _tm?.Quote(symbol, path[i].Bid, path[i].Ask); // after the fills: a stop that closed a leg here caps its loss
+                    if (changed)
+                        Save();
+                }
+                afterStep?.Invoke(new PriceStep(symbol, bar, i, path[i].Bid, path[i].Ask));
+            }
+        }
         lock (_lock)
         {
-            var bars = _history.Values
-                .SelectMany(h => h.Bars.Skip(h.RevealedCount(fromUtc)).Take(h.RevealedCount(toUtc) - h.RevealedCount(fromUtc)).Select(b => (h.Symbol.Name, Bar: b)))
-                .OrderBy(x => x.Bar.TimeUtc);
-            var changed = false;
-            foreach (var (symbol, bar) in bars)
-                changed |= Walk(symbol, bar);
             _now = toUtc;
             foreach (var s in _quotes.Keys.ToList())
                 _quotes[s] = _quotes[s] with { Live = toUtc - _quotes[s].TimeUtc <= ClosedAfter };
-            if (changed)
-                Save();
         }
     }
+
+    /// <summary>True while the symbol has an open position or a pending order (exact mode waits for TM only then).</summary>
+    public bool InTrade(string symbol)
+    {
+        lock (_lock)
+            return _account.Positions.Any(p => p.Symbol == symbol) || _account.Orders.Any(o => o.Symbol == symbol);
+    }
+
+    /// <summary>The 4 price steps of a candle (spec §6.3), bid and ask each along their own candle.</summary>
+    public static (double Bid, double Ask)[] PricePath(Bar b) => b.BidClose >= b.BidOpen
+        ? [(b.BidOpen, b.AskOpen), (b.BidLow, b.AskLow), (b.BidHigh, b.AskHigh), (b.BidClose, b.AskClose)]
+        : [(b.BidOpen, b.AskOpen), (b.BidHigh, b.AskHigh), (b.BidLow, b.AskLow), (b.BidClose, b.AskClose)];
 
     // ---- requests (the order panel; in step 4 also TM) --------------------------------------------------------
 
@@ -184,8 +221,9 @@ public sealed class SimBroker : IMarket
         }
     }
 
-    /// <summary>Closes <paramref name="volume"/> of a position (all of it when null) at the current price.</summary>
-    public void ClosePosition(long positionId, long? volume = null)
+    /// <summary>Closes <paramref name="volume"/> of a position (all of it when null) at the current price; <paramref name="by"/>
+    /// Manual for the owner (browser), Tm for a close over the Open API.</summary>
+    public void ClosePosition(long positionId, long? volume = null, CloseReason by = CloseReason.Manual)
     {
         lock (_lock)
         {
@@ -197,7 +235,7 @@ public sealed class SimBroker : IMarket
             if (v <= 0 || v > p.Volume)
                 throw new BrokerException("TRADING_BAD_VOLUME", $"Can close at most {spec.Lots(p.Volume):0.##} lots");
             var q = LiveQuote(p.Symbol);
-            Close(p, v, p.Dir > 0 ? q.Bid : q.Ask, CloseReason.Manual);
+            Close(p, v, p.Dir > 0 ? q.Bid : q.Ask, by);
             Done();
         }
     }
@@ -301,25 +339,6 @@ public sealed class SimBroker : IMarket
         }
     }
 
-    /// <summary>The 4 price steps of a candle (spec §6.3). Returns true if anything was filled or hit.</summary>
-    private bool Walk(string symbol, Bar b)
-    {
-        var rising = b.BidClose >= b.BidOpen;
-        (double Bid, double Ask)[] path = rising
-            ? [(b.BidOpen, b.AskOpen), (b.BidLow, b.AskLow), (b.BidHigh, b.AskHigh), (b.BidClose, b.AskClose)]
-            : [(b.BidOpen, b.AskOpen), (b.BidHigh, b.AskHigh), (b.BidLow, b.AskLow), (b.BidClose, b.AskClose)];
-        var changed = false;
-        for (var i = 0; i < path.Length; i++)
-        {
-            var t = b.TimeUtc + TimeSpan.FromTicks(Bar.Length.Ticks * i / (path.Length - 1));
-            _now = t;
-            _quotes[symbol] = new Quote(path[i].Bid, path[i].Ask, t, true);
-            QuoteChanged?.Invoke(symbol, _quotes[symbol]);
-            changed |= Trigger(symbol, path[i].Bid, path[i].Ask, gap: i == 0);
-        }
-        return changed;
-    }
-
     /// <summary>
     /// Fills and hits at one price step. Buy-stop and a short's SL / a long's TP watch the ask/bid as cTrader does:
     /// buy-stop when the ask reaches it; sell-stop when the bid does; a long's SL/TP on the bid, a short's on the ask.
@@ -391,7 +410,7 @@ public sealed class SimBroker : IMarket
         if (all)
             _account.Positions.Remove(p);
 
-        var what = reason switch { CloseReason.StopLoss => "stop-loss hit", CloseReason.TakeProfit => "take-profit hit", _ => "closed" };
+        var what = reason switch { CloseReason.StopLoss => "stop-loss hit", CloseReason.TakeProfit => "take-profit hit", CloseReason.Tm => "closed by TM", _ => "closed" };
         Record(new BrokerEvent(_now, all ? EventKind.PositionClosed : EventKind.PositionReduced, p.Symbol, p.Id, null, p.Dir, volume, price,
             $"{what}: {spec.Lots(volume):0.##} at {Fmt(spec, price)}, {pnl - openCommission - closeCommission:+0.00;-0.00} USD", p.Label)
             { Position = p.Copy(), Reason = reason, Commission = closeCommission, GrossProfit = pnl, Balance = _account.Balance });
@@ -467,6 +486,7 @@ public sealed class SimBroker : IMarket
         if (_recent.Count > 500)
             _recent.RemoveRange(0, 100);
         _journal?.Event(e, _specs[e.Symbol]);
+        _tm?.On(e);
         Event?.Invoke(e);
     }
 
@@ -485,7 +505,10 @@ public sealed class SimBroker : IMarket
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
         File.WriteAllText(_path + ".tmp", JsonSerializer.Serialize(_account, Json));
         File.Move(_path + ".tmp", _path, overwrite: true);
+        _tm?.Save();
     }
+
+    private Position? FindOpen(long id) => _account.Positions.FirstOrDefault(p => p.Id == id);
 
     public static string Side(int dir) => dir > 0 ? "buy" : "sell";
     private static string Fmt(SymbolSpec s, double price) => price.ToString("F" + s.Digits, System.Globalization.CultureInfo.InvariantCulture);

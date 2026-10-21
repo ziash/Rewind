@@ -3,6 +3,7 @@
 // Step 3: the simulated broker and order panel — market orders, SL/TP, P/L, commission, sessions (spec §7, §8).
 // Step 4: the Open API server, so TM (Trader project) trades on Rewind like on a broker (spec §9, §10):
 // localhost:5036 (TLS); TM's files in ~/rewind/tm/ (run-tm.sh), the certificate in ~/rewind/certs/.
+// Step 5: exact mode — price steps of symbols in a trade wait for TM (spec §6.2); TM's results in tm-trades.csv (spec §8).
 // Open http://localhost:5180.
 //
 // Reads ~/rewind/history/<SYMBOL>/*.m5.csv (rewind-download, spec §4) and ~/rewind/config/ (symbols.json,
@@ -68,6 +69,9 @@ var credentials = Rewind.OpenApi.TmFiles.Ensure(Path.Combine(root, "tm"), apiPor
 var openApi = new Rewind.OpenApi.OpenApiServer(apiPort, certificate, credentials, broker, clock, history, Info);
 updates.TmConnections = () => openApi.Connections;
 openApi.ConnectionsChanged += () => updates.Broadcast(clock.State, false);
+clock.Pacer = new Pacer(() => openApi.Connections > 0, broker.InTrade, () => openApi.LastRequestUtc,
+    TimeSpan.FromSeconds(config.ExactStepSeconds), quiet: TimeSpan.FromSeconds(0.3), max: TimeSpan.FromSeconds(5));
+clock.Paced += updates.Tick;
 
 // ---- API -------------------------------------------------------------------------------------------------------
 var api = app.MapGroup("/api");
@@ -99,6 +103,7 @@ api.MapPost("/view", (ViewRequest r) => Do(() => clock.SetView(r.Symbol, Timefra
 api.MapPost("/step", () => Do(() => clock.Step()));
 api.MapPost("/play", (PlayRequest r) => Do(() => clock.Play(r.Speed)));
 api.MapPost("/pause", () => Do(clock.Pause));
+api.MapPost("/mode", (ModeRequest r) => Do(() => clock.SetExact(r.Exact)));
 api.MapPost("/goto", (GoToRequest r) => Do(() => clock.GoTo(
     DateTime.SpecifyKind(DateTime.ParseExact(r.Time.Trim().Replace('T', ' '), ["yyyy-MM-dd HH:mm", "yyyy-MM-dd"], CultureInfo.InvariantCulture, DateTimeStyles.None), DateTimeKind.Utc))));
 api.MapPost("/skip", (SkipRequest r) => Do(() => clock.Skip(Enum.Parse<SkipTarget>(r.To, ignoreCase: true))));
@@ -185,6 +190,7 @@ static IResult Do(Action action)
 
 record ViewRequest(string Symbol, string Timeframe);
 record PlayRequest(int Speed);
+record ModeRequest(bool Exact);
 record GoToRequest(string Time);
 record SkipRequest(string To);
 record LevelRequest(string Symbol, double Price, string? Note);
@@ -226,6 +232,7 @@ sealed class Updates(ReplayClock clock, IReadOnlyDictionary<string, SymbolHistor
         s.Timeframe,
         s.Speed,
         s.Playing,
+        s.Exact,
         Utc = s.CursorUtc.ToString("ddd yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
         London = TimeZoneInfo.ConvertTimeFromUtc(s.CursorUtc, London).ToString("ddd HH:mm", CultureInfo.InvariantCulture),
         NewYork = TimeZoneInfo.ConvertTimeFromUtc(s.CursorUtc, NewYork).ToString("ddd HH:mm", CultureInfo.InvariantCulture),
@@ -234,7 +241,32 @@ sealed class Updates(ReplayClock clock, IReadOnlyDictionary<string, SymbolHistor
     public void Broadcast(ReplayState s, bool reload)
     {
         var last = reload ? null : Timeframes.Candles(history[s.Symbol], s.Timeframe, s.CursorUtc, DateTime.MaxValue, 1).Select(ToJson).FirstOrDefault();
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(new { state = Describe(s), reload, candle = last, account = broker.Snapshot(), session = sessions.Current, tm = TmConnections?.Invoke() ?? 0 }, Json);
+        Send(JsonSerializer.SerializeToUtf8Bytes(new { state = Describe(s), reload, candle = last, account = broker.Snapshot(), session = sessions.Current, tm = TmConnections?.Invoke() ?? 0 }, Json));
+    }
+
+    /// <summary>
+    /// A price step exact mode waits on (spec §6.2): the candle of the symbol on screen as far as it has formed — the
+    /// timeframe's last candle with this M5 bar's steps so far — and the account at this price.
+    /// </summary>
+    public void Tick(PriceStep step)
+    {
+        var s = clock.State;
+        object? candle = null;
+        if (step.Symbol == s.Symbol)
+        {
+            var path = SimBroker.PricePath(step.Bar).Take(step.Index + 1).Select(p => p.Bid).ToList();
+            var start = Timeframes.CandleStart(step.Bar.TimeUtc, s.Timeframe);
+            var last = Timeframes.Candles(history[s.Symbol], s.Timeframe, s.CursorUtc, DateTime.MaxValue, 1).FirstOrDefault();
+            var c = last.TimeUtc == start
+                ? last with { High = Math.Max(last.High, path.Max()), Low = Math.Min(last.Low, path.Min()), Close = step.Bid }
+                : new ChartCandle(start, path[0], path.Max(), path.Min(), step.Bid);
+            candle = ToJson(c);
+        }
+        Send(JsonSerializer.SerializeToUtf8Bytes(new { state = Describe(s), reload = false, candle, account = broker.Snapshot(), session = sessions.Current, tm = TmConnections?.Invoke() ?? 0, pacing = step.Symbol }, Json));
+    }
+
+    private void Send(byte[] bytes)
+    {
         List<(WebSocket Socket, SemaphoreSlim Gate)> sockets;
         lock (_lock)
             sockets = _sockets.ToList();

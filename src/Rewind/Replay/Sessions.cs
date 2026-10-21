@@ -59,7 +59,7 @@ public sealed partial class Sessions(string root, ReplayClock clock, Levels leve
             throw new ArgumentException("Close all positions and orders first: sessions change only when the account is flat (spec §8)");
     }
 
-    private void Load(string name, DateTime? start, double? balance)
+    private void Load(string name, DateTime? start, double? balance) => clock.Exclusive(() =>
     {
         var dir = Dir(name);
         Directory.CreateDirectory(dir);
@@ -69,7 +69,7 @@ public sealed partial class Sessions(string root, ReplayClock clock, Levels leve
         Current = name;
         File.WriteAllText(CurrentFile, name);
         clock.Refresh();
-    }
+    });
 
     private static bool Valid(string name) => NameRule().IsMatch(name);
 

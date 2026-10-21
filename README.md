@@ -6,7 +6,7 @@ A chart in the browser replays past prices: scroll back, go to any date, switch 
 
 | Item | Value |
 |---|---|
-| Status | **Steps 1–4 built** — history downloader, chart, simulated broker with order panel and sessions, and TM trading on it. Step 5 not started |
+| Status | **Steps 1–5 built** — history downloader, chart, simulated broker with order panel and sessions, TM trading on it, exact mode and TM's results per leg |
 | Specification | [docs/spec.md](docs/spec.md) — the single source of truth (goal, design, build steps, open questions, history) |
 | Price history | Dukascopy free data feed: 24 months, AUDJPY, EURGBP, EURUSD, GBPJPY, BTCUSD, ETHUSD, bid and ask; downloaded by Rewind's own tool |
 | Runs on | Ubuntu, .NET 10; GUI at `http://localhost:5180` in the browser; broker side for TM at `localhost:5036` |
@@ -24,9 +24,10 @@ Browser chart + order panel  ──►  Rewind (replay clock + simulated broker)
 ## History download (step 1)
 
 ```bash
-dotnet build -c Release
-dotnet src/Rewind.Download/bin/Release/net10.0/rewind-download.dll            # 24 months, six symbols (about 5 h; resumes)
-dotnet src/Rewind.Download/bin/Release/net10.0/rewind-download.dll --help
+dotnet build src/Rewind.Download -c Release -o ~/rewind/bin/download   # its own copy: rebuilding the repo cannot disturb a running download
+~/rewind/bin/download/rewind-download              # 24 months, six symbols (about 5 h; resumes; a re-run fetches missing days)
+~/rewind/bin/download/rewind-download --build-only # rebuild the CSV files from the downloaded files
+~/rewind/bin/download/rewind-download --help
 ```
 
 Output: `~/rewind/history/<SYMBOL>/<yyyy-MM>.m5.csv` (and `.m1.csv.gz`), opens in Google Sheets. Personal use only — never committed (except two small test sample files).
@@ -49,7 +50,11 @@ With Rewind running, start the real TM from the Trader repo against it:
 ~/rewind/tm/run-tm.sh          # Ctrl+C stops it; the header shows "TM on" while it is connected
 ```
 
-Rewind made this script, TM's fake secrets and its `tm.json` in `~/rewind/tm/`, and its TLS certificate in `~/rewind/certs/`, on first start. Open a trade in the browser and TM mirrors and hedges it like on the demo accounts; step or play (slowly — TM looks once a second) to see it manage the hedges.
+Rewind made this script, TM's fake secrets and its `tm.json` in `~/rewind/tm/`, and its TLS certificate in `~/rewind/certs/`, on first start (if Rewind's log says `tm.json` misses symbols, add them to its `"symbols"`). Open a trade in the browser and TM mirrors and hedges it like on the demo accounts.
+
+**Exact mode (step 5)** — the **Exact** button in the footer, on by default: while TM is connected, each price step of a symbol with an open position or order waits until TM has had its turn (about 5 s per candle; the footer says "Exact: waiting for TM"), so TM acts as it would live at any speed. Flat stretches and other symbols go at full speed; the skips are never paced. Off = Fast: TM may act late.
+
+**TM's results** — `tm-trades.csv` in the session folder: one row per leg (your main, TM's mirror) once it and its hedge are closed — 1R, hedge cycles, break-even, the largest loss in R (TM warns at 2R, closes at 3R), who closed it, result in R and USD (spec §8).
 
 ## Build steps
 
@@ -57,6 +62,6 @@ Rewind made this script, TM's fake secrets and its `tm.json` in `~/rewind/tm/`, 
 2. Chart: timeframes, scroll, go to, step / play, levels
 3. Simulated broker and order panel (manual trades, sessions, results CSV)
 4. Open API server so TM can connect (plus three opt-in settings in Trader)
-5. Exact replay with TM, results in R
+5. Exact mode with TM, TM's results per leg (`tm-trades.csv`)
 
 Details and status: [docs/spec.md §11](docs/spec.md#11-build-steps).

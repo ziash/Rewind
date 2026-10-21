@@ -59,6 +59,14 @@ public static class TmFiles
                 """);
             log($"Made TM's replay config {tm}");
         }
+        else
+        {
+            // Never rewritten (the owner may have changed it), but say so when TM would miss symbols that now have history.
+            var text = File.ReadAllText(tm);
+            var missing = symbols.Where(sym => !text.Contains($"\"{sym}\"", StringComparison.Ordinal)).ToList();
+            if (missing.Count > 0)
+                log($"TM's replay config {tm} does not list {string.Join(", ", missing)} (history arrived later): add them to its \"symbols\" for TM to manage trades there");
+        }
 
         var run = Path.Combine(dir, "run-tm.sh");
         if (!File.Exists(run))

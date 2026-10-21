@@ -103,6 +103,7 @@ function showState(s) {
   $('play').textContent = s.playing ? '❚❚ Pause' : '▶ Play';
   $('play').classList.toggle('on', s.playing);
   $('speed').value = s.speed;
+  $('exact').classList.toggle('on', s.exact);
   if (document.activeElement !== $('gotoTime')) $('gotoTime').value = s.cursorUtc.slice(0, 16);
   if (s.symbol !== view.symbol || s.timeframe !== view.tf) setView(s.symbol, s.timeframe);
 }
@@ -135,12 +136,21 @@ function connect() {
     if (m.account) { account = m.account; renderAccount(account); }
     $('tm').textContent = m.tm > 0 ? 'TM on' : 'TM off';
     $('tm').classList.toggle('on', m.tm > 0);
+    showPacing(m.pacing);
   };
   ws.onclose = () => {
     showError(new Error('Connection to Rewind lost — retrying…'));
     setTimeout(connect, 2000);
   };
   ws.onopen = clearError;
+}
+
+// Exact mode (spec §6.2): while a price step waits for TM, say so in the footer (an error message stays).
+function showPacing(symbol) {
+  const st = $('status');
+  if (st.className === 'error') return;
+  st.textContent = symbol ? `Exact: waiting for TM (${symbol})` : '';
+  st.className = symbol ? 'pacing' : '';
 }
 
 // ---- account, positions, orders, messages -------------------------------------------------------------------
@@ -419,6 +429,7 @@ $('symbol').onchange = e => post('/api/view', { symbol: e.target.value, timefram
 $('step').onclick = () => post('/api/step');
 $('play').onclick = () => playing() ? post('/api/pause') : post('/api/play', { speed: +$('speed').value });
 $('speed').onchange = () => { if (playing()) post('/api/play', { speed: +$('speed').value }); };
+$('exact').onclick = () => post('/api/mode', { exact: !$('exact').classList.contains('on') });
 $('goto').onsubmit = e => { e.preventDefault(); post('/api/goto', { time: $('gotoTime').value }); $('gotoTime').blur(); };
 $('addLevel').onclick = () => setPicking(picking === 'level' ? null : 'level');
 for (const b of document.querySelectorAll('[data-skip]')) b.onclick = () => post('/api/skip', { to: b.dataset.skip });

@@ -4,5 +4,7 @@
   "leverage": 500,             // shown only; margin is not simulated
   // Used only if a symbol needed for converting profits to USD has no history (spec §7):
   // GBPUSD = EURUSD / EURGBP, USDJPY = GBPJPY / GBPUSD.
-  "fallbackRates": { "GBPUSD": 1.30, "USDJPY": 150.0 }
+  "fallbackRates": { "GBPUSD": 1.30, "USDJPY": 150.0 },
+  // Exact mode (spec §6.2): after a price step of a symbol in a trade, wait at least this long for TM (it looks once a second).
+  "exactStepSeconds": 1.2
 }

@@ -13,7 +13,8 @@ public sealed record SymbolSpec(string Name, string Base, string Quote, int Digi
 }
 
 /// <summary>config/rewind.json (spec §7).</summary>
-public sealed record RewindConfig(double StartBalance = 5000, int Leverage = 500, Dictionary<string, double>? FallbackRates = null);
+/// <param name="ExactStepSeconds">Exact mode: least time per price step of a symbol in a trade (spec §6.2).</param>
+public sealed record RewindConfig(double StartBalance = 5000, int Leverage = 500, Dictionary<string, double>? FallbackRates = null, double ExactStepSeconds = 1.2);
 
 public static class ConfigFiles
 {

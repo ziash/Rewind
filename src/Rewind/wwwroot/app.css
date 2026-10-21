@@ -52,6 +52,7 @@ button:disabled { opacity: .5; cursor: default; }
 .sep { flex: 0 0 8px; }
 #status { color: var(--muted); margin-left: auto; }
 #status.error { color: var(--down); }
+#status.pacing { color: var(--accent); }
 main { flex: 1; display: flex; min-height: 0; }
 .work { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 #chart { flex: 1; min-height: 200px; position: relative; }
