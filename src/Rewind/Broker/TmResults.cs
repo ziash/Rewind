@@ -80,21 +80,49 @@ public sealed partial class TmResults : IDisposable
     public sealed class State
     {
         public List<Trade> Trades { get; set; } = [];
+
+        /// <summary>The owner's pending orders that filled: orderId → the main's positionId (a mirror order is labelled O&lt;orderId&gt;).</summary>
+        public Dictionary<long, long> OrderMains { get; set; } = [];
+
+        /// <summary>Mirrors of pending orders that filled before the owner's order: orderId → the mirror position.</summary>
+        public Dictionary<long, Position> EarlyMirrors { get; set; } = [];
     }
 
     /// <summary>The legs still open (for the tests and the page).</summary>
     public IReadOnlyList<Trade> Open => _state.Trades;
 
-    [GeneratedRegex(@"^TM-[0-9A-Za-z]{6}-P(\d+)-(MIR|HMAIN|HMIR)$")]
+    // P<main positionId>, or O<owner's orderId> for the mirror of a pending order (Trader tm.md §7).
+    [GeneratedRegex(@"^TM-[0-9A-Za-z]{6}-(P|O)(\d+)-(MIR|HMAIN|HMIR)$")]
     private static partial Regex LabelRule();
 
-    private static (long MainId, string Role)? Parse(string label) =>
-        LabelRule().Match(label) is { Success: true } m ? (long.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture), m.Groups[2].Value) : null;
+    private static (long MainId, string Role, bool ByOrder)? Parse(string label) =>
+        LabelRule().Match(label) is { Success: true } m
+            ? (long.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture), m.Groups[3].Value, m.Groups[1].Value == "O")
+            : null;
 
     /// <summary>Every broker event, in order.</summary>
     public void On(BrokerEvent e)
     {
         var tm = Parse(e.Label);
+        if (tm is { ByOrder: true } byOrder && e is { Kind: EventKind.PositionOpened, Position: { } mirror })
+        {
+            // The mirror order of the owner's pending order filled: the trade's MIR leg (its closes are found by position below).
+            if (_state.OrderMains.TryGetValue(byOrder.MainId, out var mainId))
+                EnsureLeg(mainId, "MIR", mirror);
+            else
+                _state.EarlyMirrors[byOrder.MainId] = mirror.Copy();
+            _dirty = true;
+            Finish();
+            return;
+        }
+        if (tm is null && e is { Kind: EventKind.PositionOpened, Order: { } fromOrder, Position: { } main })
+        {
+            _state.OrderMains[fromOrder.Id] = main.Id;
+            if (_state.EarlyMirrors.Remove(fromOrder.Id, out var early))
+                EnsureLeg(main.Id, "MIR", early);
+            _dirty = true;
+            return;
+        }
         switch (e.Kind)
         {
             case EventKind.OrderPlaced or EventKind.OrderAmended when tm is { Role: "HMAIN" or "HMIR" } h:
@@ -257,6 +285,9 @@ public sealed partial class TmResults : IDisposable
             if (trade.Legs.Count == 0)
                 _state.Trades.Remove(trade);
         }
+        foreach (var (orderId, mainId) in _state.OrderMains.ToList())
+            if (_position(mainId) is null && FindTrade(mainId) is null)
+                _state.OrderMains.Remove(orderId);
     }
 
     private void Write(Trade trade, Leg leg)

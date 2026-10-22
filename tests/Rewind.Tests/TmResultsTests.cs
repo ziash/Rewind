@@ -152,4 +152,26 @@ public sealed class TmResultsTests : IDisposable
         b.ClosePosition(p.Id);
         Assert.Single(File.ReadAllLines(Path.Combine(_dir, "tm-trades.csv"))); // header only
     }
+
+    [Fact]
+    public void A_pending_order_and_its_mirror_order_make_one_trade_with_two_legs()
+    {
+        // The owner's sell-stop at 1.0990 with SL 1.1000; TM's mirror order beside it, labelled with the owner's orderId.
+        var (b, clock) = Make(B(0, 1.1, 1.1002, 1.0985, 1.0988), B(1, 1.0988, 1.0989, 1.0975, 1.0978));
+        var order = b.PlaceOrder(OrderType.Stop, "EURUSD", -1, Tenth, 1.0990, stopLoss: 1.1000);
+        b.PlaceOrder(OrderType.Stop, "EURUSD", -1, Tenth, 1.0990, stopLoss: 1.1000, label: $"TM-abcdef-O{order.Id}-MIR");
+        clock.Step();                                                    // both fill at 1.0990
+        var main = b.Positions().Single(p => p.Label.Length == 0);
+        var mirror = b.Positions().Single(p => p.Label.EndsWith("-MIR"));
+        b.StopOrder("EURUSD", 1, Tenth, 1.1000, L(main.Id, "HMAIN"));     // TM hedges both at H
+        b.StopOrder("EURUSD", 1, Tenth, 1.1000, L(main.Id, "HMIR"));
+        clock.Step();
+        b.CloseAll();
+
+        var rows = Rows();
+        Assert.Equal(["MAIN", "MIR"], rows.Select(r => r["leg"]));
+        Assert.All(rows, r => Assert.Equal(($"P{main.Id}", "1.09900", "10.0"), (r["trade"], r["entry"], r["r_pips"])));
+        Assert.Empty(b.Positions());
+        Assert.NotEqual(main.Id, mirror.Id);
+    }
 }

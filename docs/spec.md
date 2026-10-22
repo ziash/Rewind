@@ -5,7 +5,7 @@
 | Item | Value |
 |---|---|
 | Status | **Steps 1–6 built** (history downloader 20-Oct-2026; chart, simulated broker and TM connection 21-Oct-2026; exact mode, TM's results, pending orders and trailing stops 22-Oct-2026) — §11 |
-| Document version | v0.7 (22-Oct-2026) — history in §15 |
+| Document version | v0.8 (22-Oct-2026) — history in §15 |
 | Owner | Zeeshan |
 | Repository | [github.com/ziash/Rewind](https://github.com/ziash/Rewind) (private) — separate from [Trader](https://github.com/ziash/Trader) |
 | Runs on | The Ubuntu laptop; browser GUI at `http://localhost:5180`; the broker side at `localhost:5036` |
@@ -179,6 +179,7 @@ A 5-minute candle only gives open, high, low, close. Rewind walks each M5 bar th
 | `result_r` | leg + its hedges, in R, before commission |
 | `commission_usd`, `pnl_usd` | leg + its hedges, in USD; P/L after commission |
 
+- A **mirror order** of the owner's pending order (TM v1.5, Trader tm.md §3.1) is labelled with the owner's order ID, `TM-xxxxxx-O<orderId>-MIR`; its position becomes the MIR leg of the trade whose main that order opened (trade = P + the main's position ID, as in TM's `actions.csv` after the fill).
 - Unfinished legs are remembered in `tm-open.json` in the session folder, so a restart of Rewind continues them (the largest loss reached between the last fill and the restart may be missed). Manual positions TM never touched get no row. Check after a run: hedge cycles, break-even and 3R closes against TM's `actions.csv` and `events.csv` (HedgeFilled, BreakEven, LossWarning, LossLimit).
 
 ## 9. TM's side
@@ -283,3 +284,4 @@ Each step on the owner's go, each tested before the next.
 | v0.5 | 21 Oct 2026 | Step 4 built: Rewind's Open API server (§10), certificate and TM's files (§9). Trader side: T1 built (Trader open-code-pieces v1.2), T2 already existed, T3 needs no code (`SSL_CERT_FILE` confirmed). TM ran unchanged on replayed prices |
 | v0.6 | 22 Oct 2026 | Step 5 built: exact mode waits for TM only on symbols in a trade and only while TM is connected (1.2 s, then 0.3 s of quiet, at most 5 s per price step; open question closed); TM results per leg in `tm-trades.csv`; trades closed over the Open API marked `Tm`. A replayed week with TM matched TM's own logs leg for leg. Full history of all six symbols in place (1-Oct-2024 → 19-Oct-2026) |
 | v0.7 | 22 Oct 2026 | Step 6 built: pending orders by hand — buy/sell limit and stop, each with stop-loss / take-profit for its position — and trailing stops, in the order panel and over the Open API (§2, §5, §7, §10). Limits fill at their price or better (after a gap), stops at their price or worse; wrong-side limits refused with `TRADING_BAD_PRICES`. Tested live with TM v1.4 (trailing break-even stops) |
+| v0.8 | 22 Oct 2026 | TM's results (§8): a mirror labelled with the owner's order ID (`O<orderId>-MIR`, TM v1.5 mirror orders) is the MIR leg of the trade that order's position starts. Tested live: TM mirrored a manual sell-stop and buy-limit with orders of the same type and price, followed a move and a cancel, and both sell-stops filled as one trade with both legs in `tm-trades.csv` (session `mirror-orders`) |
