@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Rewind.Broker;
 
 /// <summary>An open position (spec §7). Volume in Open API units; Dir +1 long, -1 short.</summary>
@@ -13,6 +15,10 @@ public sealed class Position
     public DateTime OpenRealUtc { get; set; }
     public double? StopLoss { get; set; }
     public double? TakeProfit { get; set; }
+    /// <summary>Trailing stop (spec §7): the stop-loss follows the price at <see cref="TrailDistance"/>, only in the position's favour.</summary>
+    public bool Trailing { get; set; }
+    /// <summary>Distance of a trailing stop from the price it closes at, fixed when trailing was switched on.</summary>
+    public double TrailDistance { get; set; }
     /// <summary>Stop-loss given when the position was opened: 1R for the results (spec §8).</summary>
     public double? InitialStopLoss { get; set; }
     public string Label { get; set; } = "";
@@ -23,19 +29,33 @@ public sealed class Position
     public Position Copy() => (Position)MemberwiseClone();
 }
 
-/// <summary>A pending stop order (TM's hedges, spec §7): buy-stop above the ask, sell-stop below the bid.</summary>
+/// <summary>Kind of pending order (spec §7): a stop is placed beyond the price (a breakout; TM's hedges), a limit before it (a pullback).</summary>
+public enum OrderType { Stop, Limit }
+
+/// <summary>
+/// A pending order (spec §7): buy-stop above the ask, sell-stop below the bid, buy-limit below the ask, sell-limit above
+/// the bid. Its stop-loss, take-profit and trailing switch go to the position when it fills.
+/// </summary>
 public sealed class PendingOrder
 {
     public long Id { get; set; }
     public string Symbol { get; set; } = "";
+    public OrderType Type { get; set; }
     public int Dir { get; set; }
     public long Volume { get; set; }
-    public double StopPrice { get; set; }
+    public double Price { get; set; }
+    public double? StopLoss { get; set; }
+    public double? TakeProfit { get; set; }
+    public bool Trailing { get; set; }
     public DateTime CreatedUtc { get; set; }
     public string Label { get; set; } = "";
     public string Comment { get; set; } = "";
 
     public PendingOrder Copy() => (PendingOrder)MemberwiseClone();
+
+    /// <summary>"buy-stop", "sell-limit" …</summary>
+    [JsonIgnore]
+    public string Name => $"{(Dir > 0 ? "buy" : "sell")}-{(Type == OrderType.Stop ? "stop" : "limit")}";
 }
 
 /// <summary>Everything the account remembers; saved as account.json in the session folder after every change.</summary>
@@ -57,7 +77,8 @@ public enum EventKind { PositionOpened, PositionClosed, PositionReduced, Protect
 /// <summary>
 /// Something that happened on the account, at replay time (spec §5 messages, events.csv). For the Open API server
 /// (step 4) it also carries copies of the position / order as they are after the event (a closed position with
-/// volume 0), the commission of this fill, and for a close its gross profit and the new balance (USD).
+/// volume 0), the pending order that opened a position, the commission of this fill, and for a close its gross profit and
+/// the new balance (USD).
 /// </summary>
 public sealed record BrokerEvent(DateTime TimeUtc, EventKind Kind, string Symbol, long? PositionId, long? OrderId, int Dir, long Volume,
     double Price, string Detail, string Label = "")

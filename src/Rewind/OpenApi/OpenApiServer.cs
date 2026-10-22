@@ -182,13 +182,13 @@ public sealed class OpenApiServer
         switch (e.Kind)
         {
             case EventKind.OrderPlaced:
-                yield return With(Event(ProtoOAExecutionType.OrderAccepted), order: StopOrder(e.Order!, ProtoOAOrderStatus.OrderStatusAccepted));
+                yield return With(Event(ProtoOAExecutionType.OrderAccepted), order: PendingOrderOf(e.Order!, ProtoOAOrderStatus.OrderStatusAccepted));
                 break;
             case EventKind.OrderAmended:
-                yield return With(Event(ProtoOAExecutionType.OrderReplaced), order: StopOrder(e.Order!, ProtoOAOrderStatus.OrderStatusAccepted));
+                yield return With(Event(ProtoOAExecutionType.OrderReplaced), order: PendingOrderOf(e.Order!, ProtoOAOrderStatus.OrderStatusAccepted));
                 break;
             case EventKind.OrderCancelled:
-                yield return With(Event(ProtoOAExecutionType.OrderCancelled), order: StopOrder(e.Order!, ProtoOAOrderStatus.OrderStatusCancelled));
+                yield return With(Event(ProtoOAExecutionType.OrderCancelled), order: PendingOrderOf(e.Order!, ProtoOAOrderStatus.OrderStatusCancelled));
                 break;
             case EventKind.OrderFilled:
                 break; // the PositionOpened that follows carries the fill
@@ -198,10 +198,10 @@ public sealed class OpenApiServer
             case EventKind.PositionOpened:
             {
                 var p = e.Position!;
-                var order = e.OrderId is { } stopId
-                    ? Order(stopId, p.Symbol, p.Dir, e.Volume, ProtoOAOrderType.Stop, ProtoOAOrderStatus.OrderStatusFilled, p.Label, p.Comment, e.Price, positionId: p.Id)
+                var order = e.Order is { } pending
+                    ? PendingOrderOf(pending, ProtoOAOrderStatus.OrderStatusFilled, positionId: p.Id)
                     : Order(NextId(), p.Symbol, p.Dir, e.Volume, ProtoOAOrderType.Market, ProtoOAOrderStatus.OrderStatusAccepted, p.Label, p.Comment, null, positionId: p.Id);
-                if (e.OrderId is null)
+                if (e.Order is null)
                     yield return With(Event(ProtoOAExecutionType.OrderAccepted), order: order.Clone());
                 order.OrderStatus = ProtoOAOrderStatus.OrderStatusFilled;
                 order.ExecutionPrice = e.Price;
@@ -289,6 +289,7 @@ public sealed class OpenApiServer
         };
         if (p.StopLoss is { } sl) pos.StopLoss = sl;
         if (p.TakeProfit is { } tp) pos.TakeProfit = tp;
+        if (p.Trailing) pos.TrailingStopLoss = true;
         return pos;
     }
 
@@ -308,8 +309,18 @@ public sealed class OpenApiServer
         return o;
     }
 
-    private ProtoOAOrder StopOrder(PendingOrder o, ProtoOAOrderStatus status) =>
-        Order(o.Id, o.Symbol, o.Dir, o.Volume, ProtoOAOrderType.Stop, status, o.Label, o.Comment, o.StopPrice);
+    /// <summary>A pending order as cTrader shows it: stop price or limit price, and the protection its position will get.</summary>
+    private ProtoOAOrder PendingOrderOf(PendingOrder o, ProtoOAOrderStatus status, long? positionId = null)
+    {
+        var stop = o.Type == OrderType.Stop;
+        var order = Order(o.Id, o.Symbol, o.Dir, o.Volume, stop ? ProtoOAOrderType.Stop : ProtoOAOrderType.Limit, status, o.Label, o.Comment,
+            stop ? o.Price : null, positionId);
+        if (!stop) order.LimitPrice = o.Price;
+        if (o.StopLoss is { } sl) order.StopLoss = sl;
+        if (o.TakeProfit is { } tp) order.TakeProfit = tp;
+        if (o.Trailing) order.TrailingStopLoss = true;
+        return order;
+    }
 
     private ProtoOADeal Deal(long orderId, long positionId, string symbol, int dir, long volume, double price, double commission)
     {
@@ -490,21 +501,21 @@ public sealed class OpenApiServer
                     Account(r.CtidTraderAccountId);
                     var rec = new ProtoOAReconcileRes { CtidTraderAccountId = r.CtidTraderAccountId };
                     rec.Position.AddRange(server._broker.Positions().Select(server.PositionOf));
-                    rec.Order.AddRange(server._broker.Orders().Select(o => server.StopOrder(o, ProtoOAOrderStatus.OrderStatusAccepted)));
+                    rec.Order.AddRange(server._broker.Orders().Select(o => server.PendingOrderOf(o, ProtoOAOrderStatus.OrderStatusAccepted)));
                     return [rec];
                 case ProtoOANewOrderReq r:
                     Account(r.CtidTraderAccountId);
                     return Trade(() => NewOrder(r));
                 case ProtoOAAmendOrderReq r:
                     Account(r.CtidTraderAccountId);
-                    return Trade(() => server._broker.AmendOrder(r.OrderId, r.HasStopPrice ? r.StopPrice
-                        : throw new BrokerException("INVALID_REQUEST", "Only the stop price of a stop order can be changed")));
+                    return Trade(() => AmendOrder(r));
                 case ProtoOACancelOrderReq r:
                     Account(r.CtidTraderAccountId);
                     return Trade(() => server._broker.CancelOrder(r.OrderId));
                 case ProtoOAAmendPositionSLTPReq r:
                     Account(r.CtidTraderAccountId);
-                    return Trade(() => server._broker.AmendPosition(r.PositionId, r.HasStopLoss ? r.StopLoss : null, r.HasTakeProfit ? r.TakeProfit : null));
+                    return Trade(() => server._broker.AmendPosition(r.PositionId, r.HasStopLoss ? r.StopLoss : null, r.HasTakeProfit ? r.TakeProfit : null,
+                        r.HasTrailingStopLoss && r.TrailingStopLoss));
                 case ProtoOAClosePositionReq r:
                     Account(r.CtidTraderAccountId);
                     return Trade(() => server._broker.ClosePosition(r.PositionId, r.Volume, CloseReason.Tm));
@@ -520,22 +531,48 @@ public sealed class OpenApiServer
             var dir = r.TradeSide == ProtoOATradeSide.Buy ? 1 : -1;
             var label = r.HasLabel ? r.Label : "";
             var comment = r.HasComment ? r.Comment : "";
+            var trailing = r.HasTrailingStopLoss && r.TrailingStopLoss;
             switch (r.OrderType)
             {
                 case ProtoOAOrderType.Market:
                     // cTrader puts a relative stop-loss / take-profit at that distance from the fill price.
                     var q = server._broker.QuoteOf(spec.Name);
-                    var fill = dir > 0 ? q.Ask : q.Bid;
-                    double? sl = r.HasRelativeStopLoss ? spec.Round(fill - dir * r.RelativeStopLoss / 100_000.0) : null;
-                    double? tp = r.HasRelativeTakeProfit ? spec.Round(fill + dir * r.RelativeTakeProfit / 100_000.0) : null;
-                    server._broker.MarketOrder(spec.Name, dir, r.Volume, sl, tp, label, comment);
+                    var (sl, tp) = Protection(r, spec, dir, dir > 0 ? q.Ask : q.Bid, relativeOnly: true);
+                    server._broker.MarketOrder(spec.Name, dir, r.Volume, sl, tp, label, comment, trailing);
                     break;
-                case ProtoOAOrderType.Stop:
-                    server._broker.StopOrder(spec.Name, dir, r.Volume, r.StopPrice, label, comment);
+                case ProtoOAOrderType.Stop or ProtoOAOrderType.Limit:
+                    var stop = r.OrderType == ProtoOAOrderType.Stop;
+                    var price = stop ? (r.HasStopPrice ? r.StopPrice : throw new BrokerException("INVALID_REQUEST", "A stop order needs a stop price"))
+                        : r.HasLimitPrice ? r.LimitPrice : throw new BrokerException("INVALID_REQUEST", "A limit order needs a limit price");
+                    var (psl, ptp) = Protection(r, spec, dir, price, relativeOnly: false);
+                    server._broker.PlaceOrder(stop ? OrderType.Stop : OrderType.Limit, spec.Name, dir, r.Volume, price, psl, ptp, trailing, label, comment);
                     break;
                 default:
-                    throw new BrokerException("INVALID_REQUEST", $"Rewind accepts market and stop orders, not {r.OrderType} (spec §2)");
+                    throw new BrokerException("INVALID_REQUEST", $"Rewind accepts market, limit and stop orders, not {r.OrderType} (spec §10)");
             }
+        }
+
+        /// <summary>A new order's stop-loss and take-profit: absolute (pending orders only), or relative to <paramref name="price"/>
+        /// (the fill of a market order, the order price of a pending one) in 1/100,000 of the price, as cTrader takes them.</summary>
+        private static (double? StopLoss, double? TakeProfit) Protection(ProtoOANewOrderReq r, SymbolSpec spec, int dir, double price, bool relativeOnly)
+        {
+            double? sl = r.HasRelativeStopLoss ? spec.Round(price - dir * r.RelativeStopLoss / 100_000.0) : !relativeOnly && r.HasStopLoss ? r.StopLoss : null;
+            double? tp = r.HasRelativeTakeProfit ? spec.Round(price + dir * r.RelativeTakeProfit / 100_000.0) : !relativeOnly && r.HasTakeProfit ? r.TakeProfit : null;
+            return (sl, tp);
+        }
+
+        /// <summary>Moves a pending order (its stop or limit price; the other price field is refused) and, when the request
+        /// carries any of them, replaces its stop-loss, take-profit and trailing switch; otherwise they are kept.</summary>
+        private void AmendOrder(ProtoOAAmendOrderReq r)
+        {
+            var o = server._broker.Orders().FirstOrDefault(x => x.Id == r.OrderId) ?? throw new BrokerException("OA_ORDER_NOT_FOUND", $"Order {r.OrderId} not found");
+            if (o.Type == OrderType.Stop ? r.HasLimitPrice : r.HasStopPrice)
+                throw new BrokerException("INVALID_REQUEST", $"A {o.Name} has a {(o.Type == OrderType.Stop ? "stop" : "limit")} price only");
+            var price = r.HasStopPrice ? r.StopPrice : r.HasLimitPrice ? r.LimitPrice : o.Price;
+            (double?, double?, bool)? protection = r.HasStopLoss || r.HasTakeProfit || r.HasTrailingStopLoss
+                ? (r.HasStopLoss ? r.StopLoss : null, r.HasTakeProfit ? r.TakeProfit : null, r.HasTrailingStopLoss && r.TrailingStopLoss)
+                : null;
+            server._broker.AmendOrder(r.OrderId, price, protection);
         }
 
         /// <summary>Runs a trading request and returns its events as execution events, for its clientMsgId.</summary>

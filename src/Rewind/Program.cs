@@ -112,16 +112,26 @@ api.MapPost("/skip", (SkipRequest r) => Do(() => clock.Skip(Enum.Parse<SkipTarge
 api.MapPost("/orders/market", (MarketRequest r) => Trade(() =>
 {
     var spec = specs.GetValueOrDefault(r.Symbol) ?? throw new BrokerException("SYMBOL_NOT_FOUND", $"Unknown symbol {r.Symbol}");
-    broker.MarketOrder(r.Symbol, r.Side == "buy" ? 1 : r.Side == "sell" ? -1 : throw new BrokerException("BAD_SIDE", "side must be buy or sell"),
-        spec.Volume(r.Lots), r.StopLoss, r.TakeProfit);
+    broker.MarketOrder(r.Symbol, SideOf(r.Side), spec.Volume(r.Lots), r.StopLoss, r.TakeProfit, trailing: r.Trailing ?? false);
 }));
-api.MapPost("/positions/{id:long}/protection", (long id, ProtectionRequest r) => Trade(() => broker.AmendPosition(id, r.StopLoss, r.TakeProfit)));
+api.MapPost("/orders/pending", (PendingRequest r) => Trade(() =>
+{
+    var spec = specs.GetValueOrDefault(r.Symbol) ?? throw new BrokerException("SYMBOL_NOT_FOUND", $"Unknown symbol {r.Symbol}");
+    var type = r.Type switch
+    {
+        "limit" => OrderType.Limit,
+        "stop" => OrderType.Stop,
+        _ => throw new BrokerException("BAD_TYPE", "type must be limit or stop"),
+    };
+    broker.PlaceOrder(type, r.Symbol, SideOf(r.Side), spec.Volume(r.Lots), r.Price, r.StopLoss, r.TakeProfit, r.Trailing ?? false);
+}));
+api.MapPost("/positions/{id:long}/protection", (long id, ProtectionRequest r) => Trade(() => broker.AmendPosition(id, r.StopLoss, r.TakeProfit, r.Trailing ?? false)));
 api.MapPost("/positions/{id:long}/close", (long id, CloseRequest r) => Trade(() =>
 {
     broker.ClosePosition(id, r.Lots is { } lots ? VolumeOf(id, lots) : null);
 }));
 api.MapPost("/positions/close-all", () => Trade(broker.CloseAll));
-api.MapPost("/orders/{id:long}/amend", (long id, AmendRequest r) => Trade(() => broker.AmendOrder(id, r.Price)));
+api.MapPost("/orders/{id:long}/amend", (long id, AmendRequest r) => Trade(() => broker.AmendOrder(id, r.Price, (r.StopLoss, r.TakeProfit, r.Trailing ?? false))));
 api.MapDelete("/orders/{id:long}", (long id) => Trade(() => broker.CancelOrder(id)));
 api.MapGet("/account", broker.Snapshot);
 
@@ -162,6 +172,8 @@ long VolumeOf(long positionId, double lots)
     return specs[symbol].Volume(lots);
 }
 
+static int SideOf(string side) => side == "buy" ? 1 : side == "sell" ? -1 : throw new BrokerException("BAD_SIDE", "side must be buy or sell");
+
 static IResult Trade(Action action)
 {
     try
@@ -194,10 +206,11 @@ record ModeRequest(bool Exact);
 record GoToRequest(string Time);
 record SkipRequest(string To);
 record LevelRequest(string Symbol, double Price, string? Note);
-record MarketRequest(string Symbol, string Side, double Lots, double? StopLoss, double? TakeProfit);
-record ProtectionRequest(double? StopLoss, double? TakeProfit);
+record MarketRequest(string Symbol, string Side, double Lots, double? StopLoss, double? TakeProfit, bool? Trailing);
+record PendingRequest(string Symbol, string Side, string Type, double Lots, double Price, double? StopLoss, double? TakeProfit, bool? Trailing);
+record ProtectionRequest(double? StopLoss, double? TakeProfit, bool? Trailing);
 record CloseRequest(double? Lots);
-record AmendRequest(double Price);
+record AmendRequest(double Price, double? StopLoss, double? TakeProfit, bool? Trailing);
 record NewSessionRequest(string Name, string Start, double? Balance);
 record OpenSessionRequest(string Name);
 

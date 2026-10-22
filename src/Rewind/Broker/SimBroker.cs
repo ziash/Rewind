@@ -143,7 +143,8 @@ public sealed class SimBroker : IMarket
 
     // ---- requests (the order panel; in step 4 also TM) --------------------------------------------------------
 
-    public Position MarketOrder(string symbol, int dir, long volume, double? stopLoss, double? takeProfit, string label = "", string comment = "")
+    /// <param name="trailing">The stop-loss trails the price (spec §7); needs a stop-loss.</param>
+    public Position MarketOrder(string symbol, int dir, long volume, double? stopLoss, double? takeProfit, string label = "", string comment = "", bool trailing = false)
     {
         lock (_lock)
         {
@@ -152,42 +153,49 @@ public sealed class SimBroker : IMarket
             var q = LiveQuote(symbol);
             var price = dir > 0 ? q.Ask : q.Bid;
             CheckStops(spec, dir, q, stopLoss, takeProfit);
-            var p = OpenPosition(symbol, dir, volume, price, label, comment, stopLoss, takeProfit, orderId: null);
+            CheckTrailing(stopLoss, trailing);
+            var p = OpenPosition(symbol, dir, volume, price, label, comment, stopLoss, takeProfit, order: null, trailing);
             Done();
             return p;
         }
     }
 
-    public PendingOrder StopOrder(string symbol, int dir, long volume, double stopPrice, string label = "", string comment = "")
+    /// <summary>A pending stop order (TM's hedges): buy-stop above the ask, sell-stop below the bid.</summary>
+    public PendingOrder StopOrder(string symbol, int dir, long volume, double stopPrice, string label = "", string comment = "") =>
+        PlaceOrder(OrderType.Stop, symbol, dir, volume, stopPrice, label: label, comment: comment);
+
+    /// <summary>
+    /// A pending order (spec §7): stop (buy above the ask, sell below the bid) or limit (buy below the ask, sell above
+    /// the bid), with an optional stop-loss, take-profit and trailing switch for the position it opens.
+    /// </summary>
+    public PendingOrder PlaceOrder(OrderType type, string symbol, int dir, long volume, double price, double? stopLoss = null, double? takeProfit = null,
+        bool trailing = false, string label = "", string comment = "")
     {
         lock (_lock)
         {
             var spec = Spec(symbol);
             CheckVolume(spec, volume);
-            var q = LiveQuote(symbol);
-            stopPrice = spec.Round(stopPrice);
-            if (dir > 0 ? stopPrice <= q.Ask : stopPrice >= q.Bid)
-                throw new BrokerException("TRADING_BAD_STOPS", $"A {(dir > 0 ? "buy-stop must be above the ask" : "sell-stop must be below the bid")} ({Fmt(spec, dir > 0 ? q.Ask : q.Bid)})");
-            var o = new PendingOrder { Id = _account.NextId++, Symbol = symbol, Dir = dir, Volume = volume, StopPrice = stopPrice, CreatedUtc = _now, Label = label, Comment = comment };
+            var o = new PendingOrder { Id = _account.NextId, Symbol = symbol, Type = type, Dir = dir, Volume = volume, CreatedUtc = _now, Label = label, Comment = comment };
+            SetOrder(o, spec, LiveQuote(symbol), price, stopLoss, takeProfit, trailing, "be");
+            _account.NextId++;
             _account.Orders.Add(o);
-            Record(new BrokerEvent(_now, EventKind.OrderPlaced, symbol, null, o.Id, dir, volume, stopPrice, $"{Side(dir)}-stop at {Fmt(spec, stopPrice)}", label) { Order = o.Copy() });
+            Record(new BrokerEvent(_now, EventKind.OrderPlaced, symbol, null, o.Id, dir, volume, o.Price, $"{o.Name} at {Fmt(spec, o.Price)}{Protection(spec, o)}", label) { Order = o.Copy() });
             Done();
             return o;
         }
     }
 
-    public void AmendOrder(long orderId, double stopPrice)
+    /// <summary>Moves a pending order to <paramref name="price"/>; <paramref name="protection"/> replaces its stop-loss,
+    /// take-profit and trailing switch (null keeps them).</summary>
+    public void AmendOrder(long orderId, double price, (double? StopLoss, double? TakeProfit, bool Trailing)? protection = null)
     {
         lock (_lock)
         {
             var o = _account.Orders.FirstOrDefault(x => x.Id == orderId) ?? throw new BrokerException("OA_ORDER_NOT_FOUND", $"Order {orderId} not found");
             var spec = Spec(o.Symbol);
-            var q = LiveQuote(o.Symbol);
-            stopPrice = spec.Round(stopPrice);
-            if (o.Dir > 0 ? stopPrice <= q.Ask : stopPrice >= q.Bid)
-                throw new BrokerException("TRADING_BAD_STOPS", $"A {(o.Dir > 0 ? "buy-stop must stay above the ask" : "sell-stop must stay below the bid")} ({Fmt(spec, o.Dir > 0 ? q.Ask : q.Bid)})");
-            o.StopPrice = stopPrice;
-            Record(new BrokerEvent(_now, EventKind.OrderAmended, o.Symbol, null, o.Id, o.Dir, o.Volume, stopPrice, $"moved to {Fmt(spec, stopPrice)}", o.Label) { Order = o.Copy() });
+            var (sl, tp, trailing) = protection ?? (o.StopLoss, o.TakeProfit, o.Trailing);
+            SetOrder(o, spec, LiveQuote(o.Symbol), price, sl, tp, trailing, "stay");
+            Record(new BrokerEvent(_now, EventKind.OrderAmended, o.Symbol, null, o.Id, o.Dir, o.Volume, o.Price, $"{o.Name} moved to {Fmt(spec, o.Price)}{Protection(spec, o)}", o.Label) { Order = o.Copy() });
             Done();
         }
     }
@@ -198,13 +206,13 @@ public sealed class SimBroker : IMarket
         {
             var o = _account.Orders.FirstOrDefault(x => x.Id == orderId) ?? throw new BrokerException("OA_ORDER_NOT_FOUND", $"Order {orderId} not found");
             _account.Orders.Remove(o);
-            Record(new BrokerEvent(_now, EventKind.OrderCancelled, o.Symbol, null, o.Id, o.Dir, o.Volume, o.StopPrice, "cancelled", o.Label) { Order = o.Copy() });
+            Record(new BrokerEvent(_now, EventKind.OrderCancelled, o.Symbol, null, o.Id, o.Dir, o.Volume, o.Price, $"{o.Name} cancelled", o.Label) { Order = o.Copy() });
             Done();
         }
     }
 
-    /// <summary>Sets a position's stop-loss and take-profit; null removes it.</summary>
-    public void AmendPosition(long positionId, double? stopLoss, double? takeProfit)
+    /// <summary>Sets a position's stop-loss and take-profit (null removes it) and whether the stop-loss trails (spec §7).</summary>
+    public void AmendPosition(long positionId, double? stopLoss, double? takeProfit, bool trailing = false)
     {
         lock (_lock)
         {
@@ -212,11 +220,14 @@ public sealed class SimBroker : IMarket
             var spec = Spec(p.Symbol);
             stopLoss = stopLoss is { } sl ? spec.Round(sl) : null;
             takeProfit = takeProfit is { } tp ? spec.Round(tp) : null;
-            CheckStops(spec, p.Dir, LiveQuote(p.Symbol, allowClosed: true), stopLoss, takeProfit);
+            var q = LiveQuote(p.Symbol, allowClosed: true);
+            CheckStops(spec, p.Dir, q, stopLoss, takeProfit);
+            CheckTrailing(stopLoss, trailing);
             p.StopLoss = stopLoss;
             p.TakeProfit = takeProfit;
+            SetTrailing(p, trailing, p.Dir > 0 ? q.Bid : q.Ask);
             Record(new BrokerEvent(_now, EventKind.ProtectionChanged, p.Symbol, p.Id, null, p.Dir, p.Volume, p.Entry,
-                $"SL {(stopLoss is null ? "none" : Fmt(spec, stopLoss.Value))}, TP {(takeProfit is null ? "none" : Fmt(spec, takeProfit.Value))}", p.Label) { Position = p.Copy() });
+                $"SL {(stopLoss is null ? "none" : Fmt(spec, stopLoss.Value))}{(p.Trailing ? " trailing" : "")}, TP {(takeProfit is null ? "none" : Fmt(spec, takeProfit.Value))}", p.Label) { Position = p.Copy() });
             Done();
         }
     }
@@ -247,7 +258,7 @@ public sealed class SimBroker : IMarket
             foreach (var o in _account.Orders.ToList())
             {
                 _account.Orders.Remove(o);
-                Record(new BrokerEvent(_now, EventKind.OrderCancelled, o.Symbol, null, o.Id, o.Dir, o.Volume, o.StopPrice, "cancelled (close all)", o.Label) { Order = o.Copy() });
+                Record(new BrokerEvent(_now, EventKind.OrderCancelled, o.Symbol, null, o.Id, o.Dir, o.Volume, o.Price, $"{o.Name} cancelled (close all)", o.Label) { Order = o.Copy() });
             }
             foreach (var p in _account.Positions.ToList())
             {
@@ -271,7 +282,7 @@ public sealed class SimBroker : IMarket
                 var exit = p.Dir > 0 ? q.Bid : q.Ask;
                 return new
                 {
-                    p.Id, p.Symbol, Side = Side(p.Dir), Lots = spec.Lots(p.Volume), p.Entry, p.StopLoss, p.TakeProfit, p.Label, p.OpenUtc,
+                    p.Id, p.Symbol, Side = Side(p.Dir), Lots = spec.Lots(p.Volume), p.Entry, p.StopLoss, p.TakeProfit, p.Trailing, p.Label, p.OpenUtc,
                     Price = exit,
                     Pips = Math.Round(p.Dir * (exit - p.Entry) / spec.PipSize, 1),
                     PnlUsd = Math.Round(Pnl(p, p.Volume, exit), 2),
@@ -286,7 +297,11 @@ public sealed class SimBroker : IMarket
                 CommissionPaid = Math.Round(_account.CommissionPaid, 2),
                 _account.StartBalance,
                 Positions = positions,
-                Orders = _account.Orders.Select(o => new { o.Id, o.Symbol, Side = Side(o.Dir), Lots = _specs[o.Symbol].Lots(o.Volume), Price = o.StopPrice, o.Label, o.CreatedUtc }),
+                Orders = _account.Orders.Select(o => new
+                {
+                    o.Id, o.Symbol, Side = Side(o.Dir), Type = o.Type.ToString().ToLowerInvariant(), o.Name, Lots = _specs[o.Symbol].Lots(o.Volume), o.Price,
+                    o.StopLoss, o.TakeProfit, o.Trailing, o.Label, o.CreatedUtc,
+                }),
                 Quotes = _quotes.ToDictionary(kv => kv.Key, kv => new { kv.Value.Bid, kv.Value.Ask, kv.Value.Live }),
                 Events = _recent.AsEnumerable().Reverse().Take(60).Select(e => new
                 {
@@ -340,23 +355,26 @@ public sealed class SimBroker : IMarket
     }
 
     /// <summary>
-    /// Fills and hits at one price step. Buy-stop and a short's SL / a long's TP watch the ask/bid as cTrader does:
-    /// buy-stop when the ask reaches it; sell-stop when the bid does; a long's SL/TP on the bid, a short's on the ask.
-    /// Within a candle the level's own price is used; at the open (gap) the open's price.
+    /// Fills and hits at one price step, on the side of the price cTrader uses: buy orders on the ask, sell orders on
+    /// the bid; a long's SL/TP on the bid, a short's on the ask. A stop fills when the price reaches it, a limit when the
+    /// price comes back to it. Within a candle the level's own price is used; at the open (gap) the open's price — worse
+    /// than the level for a stop and a stop-loss (slippage), better for a limit and a take-profit. Trailing stops then
+    /// follow the step's price (spec §7).
     /// </summary>
     private bool Trigger(string symbol, double bid, double ask, bool gap)
     {
         var changed = false;
         foreach (var o in _account.Orders.Where(o => o.Symbol == symbol).ToList())
         {
-            var hit = o.Dir > 0 ? ask >= o.StopPrice : bid <= o.StopPrice;
+            var market = o.Dir > 0 ? ask : bid;
+            var hit = o.Type == OrderType.Stop ? o.Dir * (market - o.Price) >= 0 : o.Dir * (market - o.Price) <= 0;
             if (!hit)
                 continue;
-            var price = gap ? (o.Dir > 0 ? ask : bid) : o.StopPrice;
+            var price = gap ? market : o.Price;
             _account.Orders.Remove(o);
             Record(new BrokerEvent(_now, EventKind.OrderFilled, symbol, null, o.Id, o.Dir, o.Volume, price,
-                $"{Side(o.Dir)}-stop {Fmt(_specs[symbol], o.StopPrice)} filled at {Fmt(_specs[symbol], price)}", o.Label) { Order = o.Copy() });
-            OpenPosition(symbol, o.Dir, o.Volume, price, o.Label, o.Comment, null, null, o.Id);
+                $"{o.Name} {Fmt(_specs[symbol], o.Price)} filled at {Fmt(_specs[symbol], price)}", o.Label) { Order = o.Copy() });
+            OpenPosition(symbol, o.Dir, o.Volume, price, o.Label, o.Comment, o.StopLoss, o.TakeProfit, o, o.Trailing);
             changed = true;
         }
 
@@ -373,11 +391,22 @@ public sealed class SimBroker : IMarket
                 Close(p, p.Volume, gap ? exitSide : tp, CloseReason.TakeProfit);
                 changed = true;
             }
+            else if (p is { Trailing: true, StopLoss: { } current })
+            {
+                // Moved without an event: TM sees the new stop-loss at its next reconcile (spec §10).
+                var next = _specs[symbol].Round(exitSide - p.Dir * p.TrailDistance);
+                if (p.Dir * (next - current) > 0)
+                {
+                    p.StopLoss = next;
+                    changed = true;
+                }
+            }
         }
         return changed;
     }
 
-    private Position OpenPosition(string symbol, int dir, long volume, double price, string label, string comment, double? sl, double? tp, long? orderId)
+    private Position OpenPosition(string symbol, int dir, long volume, double price, string label, string comment, double? sl, double? tp, PendingOrder? order,
+        bool trailing = false)
     {
         var spec = _specs[symbol];
         var commission = Commission(symbol, volume, price);
@@ -386,12 +415,14 @@ public sealed class SimBroker : IMarket
             Id = _account.NextId++, Symbol = symbol, Dir = dir, Volume = volume, Entry = price, OpenUtc = _now, OpenRealUtc = DateTime.UtcNow,
             StopLoss = sl, TakeProfit = tp, InitialStopLoss = sl, Label = label, Comment = comment, OpenCommission = commission,
         };
+        var q = _quotes[symbol];
+        SetTrailing(p, trailing, price - dir * (q.Ask - q.Bid)); // from the price it would close at, at the fill
         _account.Positions.Add(p);
         _account.Balance -= commission;
         _account.CommissionPaid += commission;
-        Record(new BrokerEvent(_now, EventKind.PositionOpened, symbol, p.Id, orderId, dir, volume, price,
-            $"{Side(dir)} {spec.Lots(volume):0.##} at {Fmt(spec, price)}" + (sl is null ? "" : $", SL {Fmt(spec, sl.Value)}") + (tp is null ? "" : $", TP {Fmt(spec, tp.Value)}"), label)
-            { Position = p.Copy(), Commission = commission, Balance = _account.Balance });
+        Record(new BrokerEvent(_now, EventKind.PositionOpened, symbol, p.Id, order?.Id, dir, volume, price,
+            $"{Side(dir)} {spec.Lots(volume):0.##} at {Fmt(spec, price)}" + (sl is null ? "" : $", SL {Fmt(spec, sl.Value)}{(p.Trailing ? " trailing" : "")}") + (tp is null ? "" : $", TP {Fmt(spec, tp.Value)}"), label)
+            { Position = p.Copy(), Order = order?.Copy(), Commission = commission, Balance = _account.Balance });
         return p;
     }
 
@@ -476,6 +507,51 @@ public sealed class SimBroker : IMarket
         if (tp is { } t && (dir > 0 ? t <= exit : t >= exit))
             throw new BrokerException("TRADING_BAD_STOPS", $"Take-profit {Fmt(s, t)} must be {(dir > 0 ? "above the bid" : "below the ask")} ({Fmt(s, exit)})");
     }
+
+    /// <summary>
+    /// Checks and sets a pending order's price and protection. cTrader's codes: a stop on the wrong side of the price
+    /// TRADING_BAD_STOPS, a limit TRADING_BAD_PRICES; the stop-loss / take-profit must lie on the right side of the order price.
+    /// </summary>
+    private static void SetOrder(PendingOrder o, SymbolSpec s, Quote q, double price, double? sl, double? tp, bool trailing, string verb)
+    {
+        price = s.Round(price);
+        var market = o.Dir > 0 ? q.Ask : q.Bid;
+        var where = (o.Type, o.Dir) switch
+        {
+            (OrderType.Stop, > 0) => "above the ask",
+            (OrderType.Stop, _) => "below the bid",
+            (OrderType.Limit, > 0) => "below the ask",
+            _ => "above the bid",
+        };
+        var ahead = o.Type == OrderType.Stop ? o.Dir * (price - market) > 0 : o.Dir * (price - market) < 0;
+        if (!ahead)
+            throw new BrokerException(o.Type == OrderType.Stop ? "TRADING_BAD_STOPS" : "TRADING_BAD_PRICES", $"A {o.Name} must {verb} {where} ({Fmt(s, market)})");
+        sl = sl is { } l ? s.Round(l) : null;
+        tp = tp is { } t ? s.Round(t) : null;
+        if (sl is { } l2 && o.Dir * (price - l2) <= 0)
+            throw new BrokerException("TRADING_BAD_STOPS", $"Stop-loss {Fmt(s, l2)} must be {(o.Dir > 0 ? "below" : "above")} the order price {Fmt(s, price)}");
+        if (tp is { } t2 && o.Dir * (t2 - price) <= 0)
+            throw new BrokerException("TRADING_BAD_STOPS", $"Take-profit {Fmt(s, t2)} must be {(o.Dir > 0 ? "above" : "below")} the order price {Fmt(s, price)}");
+        CheckTrailing(sl, trailing);
+        (o.Price, o.StopLoss, o.TakeProfit, o.Trailing) = (price, sl, tp, trailing);
+    }
+
+    private static void CheckTrailing(double? stopLoss, bool trailing)
+    {
+        if (trailing && stopLoss is null)
+            throw new BrokerException("TRADING_BAD_STOPS", "A trailing stop needs a stop-loss");
+    }
+
+    /// <summary>Switches a position's trailing stop on or off (spec §7); its distance is fixed now, from <paramref name="exit"/>,
+    /// the price the position would close at.</summary>
+    private static void SetTrailing(Position p, bool on, double exit)
+    {
+        p.Trailing = on && p.StopLoss is not null;
+        p.TrailDistance = p.Trailing ? Math.Abs(exit - p.StopLoss!.Value) : 0;
+    }
+
+    private static string Protection(SymbolSpec s, PendingOrder o) =>
+        (o.StopLoss is { } sl ? $", SL {Fmt(s, sl)}{(o.Trailing ? " trailing" : "")}" : "") + (o.TakeProfit is { } tp ? $", TP {Fmt(s, tp)}" : "");
 
     private Position FindPosition(long id) =>
         _account.Positions.FirstOrDefault(p => p.Id == id) ?? throw new BrokerException("POSITION_NOT_FOUND", $"Position {id} not found");

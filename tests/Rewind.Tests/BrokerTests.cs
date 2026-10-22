@@ -160,4 +160,93 @@ public sealed class BrokerTests : IDisposable
         Assert.Equal(1.1050, b2.Positions().Single().StopLoss);
         Assert.Equal(b.Balance(), b2.Balance(), 2);
     }
+
+    // ---- pending orders and trailing stops (spec §7, v0.7) --------------------------------------------------------
+
+    [Fact]
+    public void Limit_orders_fill_at_their_price_or_better_after_a_gap()
+    {
+        // Candle 0 rises (open → low 1.0985 → high → close); candle 1 opens with a gap up to 1.1040.
+        var (b, clock) = Make(B(0, 1.1, 1.1010, 1.0985, 1.1005), B(1, 1.1040, 1.1045, 1.1035, 1.1040));
+        var buyLimit = b.PlaceOrder(OrderType.Limit, "EURUSD", 1, Tenth, 1.0990);   // pullback: the ask comes down to it
+        var sellLimit = b.PlaceOrder(OrderType.Limit, "EURUSD", -1, Tenth, 1.1030); // rally: the bid jumps over it
+        clock.Step();
+        Assert.Equal(1.0990, b.Positions().Single(p => p.Dir > 0).Entry, 5);
+        Assert.Equal(sellLimit.Id, b.Orders().Single().Id);
+        clock.Step();
+        Assert.Equal(1.1040, b.Positions().Single(p => p.Dir < 0).Entry, 5);       // the open: better than 1.1030
+        Assert.Empty(b.Orders());
+        Assert.NotEqual(buyLimit.Id, sellLimit.Id);
+    }
+
+    [Fact]
+    public void Sell_stop_fills_when_the_bid_falls_to_it()
+    {
+        var (b, clock) = Make(B(0, 1.1, 1.1002, 1.0980, 1.0985));
+        b.PlaceOrder(OrderType.Stop, "EURUSD", -1, Tenth, 1.0990); // breakdown
+        clock.Step();
+        var p = b.Positions().Single();
+        Assert.Equal((-1, 1.0990), (p.Dir, Math.Round(p.Entry, 5)));
+    }
+
+    [Fact]
+    public void Each_pending_order_must_sit_on_its_own_side_of_the_price()
+    {
+        var (b, _) = Make(B(0, 1.1, 1.1, 1.1, 1.1)); // bid 1.10000, ask 1.10002
+        BrokerException Refused(OrderType t, int dir, double price) => Assert.Throws<BrokerException>(() => b.PlaceOrder(t, "EURUSD", dir, Tenth, price));
+        Assert.Equal("TRADING_BAD_PRICES", Refused(OrderType.Limit, 1, 1.1010).Code);  // buy-limit above the ask
+        Assert.Equal("TRADING_BAD_PRICES", Refused(OrderType.Limit, -1, 1.0990).Code); // sell-limit below the bid
+        Assert.Equal("TRADING_BAD_STOPS", Refused(OrderType.Stop, 1, 1.0990).Code);    // buy-stop below the ask
+        Assert.Equal("TRADING_BAD_STOPS", Refused(OrderType.Stop, -1, 1.1010).Code);   // sell-stop above the bid
+        var o = b.PlaceOrder(OrderType.Limit, "EURUSD", 1, Tenth, 1.0990);
+        Assert.Equal("TRADING_BAD_PRICES", Assert.Throws<BrokerException>(() => b.AmendOrder(o.Id, 1.1010)).Code);
+        Assert.Equal(1.0990, b.Orders().Single().Price);
+    }
+
+    [Fact]
+    public void A_pending_orders_stop_loss_and_take_profit_go_to_its_position()
+    {
+        var (b, clock) = Make(B(0, 1.1, 1.1003, 1.0985, 1.0995)); // falling: the buy-limit fills on the way down
+        Assert.Equal("TRADING_BAD_STOPS", Assert.Throws<BrokerException>(() =>
+            b.PlaceOrder(OrderType.Limit, "EURUSD", 1, Tenth, 1.0990, stopLoss: 1.0995)).Code);  // SL above a buy's entry
+        Assert.Equal("TRADING_BAD_STOPS", Assert.Throws<BrokerException>(() =>
+            b.PlaceOrder(OrderType.Limit, "EURUSD", 1, Tenth, 1.0990, trailing: true)).Code);    // trailing without SL
+        var o = b.PlaceOrder(OrderType.Limit, "EURUSD", 1, Tenth, 1.0990, stopLoss: 1.0970, takeProfit: 1.1030);
+        b.AmendOrder(o.Id, 1.0988);                                                             // moved: protection kept
+        Assert.Equal((1.0970, 1.1030), (b.Orders().Single().StopLoss, b.Orders().Single().TakeProfit));
+        clock.Step();
+        var p = b.Positions().Single();
+        Assert.Equal((1.0988, 1.0970, 1.1030, 1.0970), (p.Entry, p.StopLoss, p.TakeProfit, p.InitialStopLoss));
+    }
+
+    [Fact]
+    public void Trailing_stop_follows_the_price_in_the_trades_favour_only()
+    {
+        // Long at the ask 1.10002, SL 1.0990 trailing: 10 pips behind the bid (1.10000 at the opening).
+        // Candle 0 rises to 1.1030 (SL → 1.1020) and closes at 1.1025; candle 1 (high 1.1026 would only give 1.1016)
+        // dips to 1.1010: stopped at 1.1020.
+        var (b, clock) = Make(B(0, 1.1, 1.1030, 1.0995, 1.1025), B(1, 1.1025, 1.1026, 1.1010, 1.1015));
+        b.MarketOrder("EURUSD", 1, Tenth, 1.0990, null, trailing: true);
+        clock.Step();
+        var p = b.Positions().Single();
+        Assert.True(p.Trailing);
+        Assert.Equal(1.1020, p.StopLoss!.Value, 5);           // moved up at the high, not back down at the close
+        clock.Step();
+        Assert.True(b.IsFlat);
+        var trade = File.ReadAllLines(Path.Combine(_dir, "trades.csv"))[1].Split(',');
+        Assert.Equal(("1.10200", "StopLoss"), (trade[6], trade[12]));
+    }
+
+    [Fact]
+    public void Trailing_switched_on_later_and_off_again_on_a_short()
+    {
+        var (b, clock) = Make(B(0, 1.1, 1.1003, 1.0970, 1.0975), B(1, 1.0975, 1.0976, 1.0960, 1.0965));
+        var p = b.MarketOrder("EURUSD", -1, Tenth, 1.1010, null);
+        b.AmendPosition(p.Id, 1.1010, null, trailing: true);  // 9.8 pips above the ask 1.10002
+        clock.Step();                                         // low 1.0970 (ask 1.09702) → SL 1.09800
+        Assert.Equal(1.0980, b.Positions().Single().StopLoss!.Value, 5);
+        b.AmendPosition(p.Id, 1.0980, null, trailing: false);
+        clock.Step();                                         // lower again, but no longer trailing
+        Assert.Equal((false, 1.0980), (b.Positions().Single().Trailing, b.Positions().Single().StopLoss!.Value));
+    }
 }

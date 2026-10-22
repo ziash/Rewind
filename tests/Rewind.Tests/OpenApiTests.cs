@@ -113,6 +113,59 @@ public sealed class OpenApiTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Limit_order_with_protection_is_reported_and_filled_as_cTrader_does()
+    {
+        var (client, clock, broker) = await StartAsync();
+        var placed = Assert.IsType<ProtoOAExecutionEvent>(await client.AskAsync(new ProtoOANewOrderReq
+        {
+            CtidTraderAccountId = Credentials.AccountId, SymbolId = 1, OrderType = ProtoOAOrderType.Limit, TradeSide = ProtoOATradeSide.Buy,
+            Volume = 1_000_000, LimitPrice = 1.09995, StopLoss = 1.099, TakeProfit = 1.105, TrailingStopLoss = true,
+        }));
+        Assert.Equal(ProtoOAExecutionType.OrderAccepted, placed.ExecutionType);
+        Assert.Equal((ProtoOAOrderType.Limit, 1.09995, 1.099, 1.105, true, false),
+            (placed.Order.OrderType, placed.Order.LimitPrice, placed.Order.StopLoss, placed.Order.TakeProfit, placed.Order.TrailingStopLoss, placed.Order.HasStopPrice));
+
+        var rec = Assert.IsType<ProtoOAReconcileRes>(await client.AskAsync(new ProtoOAReconcileReq { CtidTraderAccountId = Credentials.AccountId }));
+        Assert.Equal(ProtoOAOrderType.Limit, rec.Order.Single().OrderType);
+
+        var wrong = await client.AskAsync(new ProtoOANewOrderReq
+        {
+            CtidTraderAccountId = Credentials.AccountId, SymbolId = 1, OrderType = ProtoOAOrderType.Limit, TradeSide = ProtoOATradeSide.Sell,
+            Volume = 1_000_000, LimitPrice = 1.099,
+        });
+        Assert.Equal("TRADING_BAD_PRICES", Assert.IsType<ProtoOAOrderErrorEvent>(wrong).ErrorCode); // sell-limit below the bid
+
+        clock.Step(); // the ask dips to 1.09992: the buy-limit fills at its price
+        var fill = (await client.CollectAsync(TimeSpan.FromSeconds(2))).OfType<ProtoOAExecutionEvent>().Single(e => e.ExecutionType == ProtoOAExecutionType.OrderFilled);
+        Assert.Equal((ProtoOAOrderType.Limit, placed.Order.OrderId, 1.09995), (fill.Order.OrderType, fill.Order.OrderId, fill.Deal.ExecutionPrice));
+        Assert.Equal((1.105, true, "", 0), (fill.Position.TakeProfit, fill.Position.TrailingStopLoss, fill.Position.TradeData.Label, rec.Position.Count));
+        Assert.Equal(1.099, fill.Position.StopLoss, 5);                  // as at the fill …
+        Assert.True(broker.Positions().Single().StopLoss > 1.0999);     // … then trailed up with the candle's high (no event: TM reconciles)
+    }
+
+    [Fact]
+    public async Task Stop_loss_can_be_set_trailing_and_back()
+    {
+        var (client, _, broker) = await StartAsync();
+        await client.AskAllAsync(new ProtoOANewOrderReq
+        {
+            CtidTraderAccountId = Credentials.AccountId, SymbolId = 1, OrderType = ProtoOAOrderType.Market, TradeSide = ProtoOATradeSide.Buy, Volume = 1_000_000,
+        }, count: 2);
+        var id = broker.Positions().Single().Id;
+        var on = Assert.IsType<ProtoOAExecutionEvent>(await client.AskAsync(new ProtoOAAmendPositionSLTPReq
+        {
+            CtidTraderAccountId = Credentials.AccountId, PositionId = id, StopLoss = 1.099, TrailingStopLoss = true,
+        }));
+        Assert.Equal((ProtoOAExecutionType.OrderReplaced, true), (on.ExecutionType, on.Position.TrailingStopLoss));
+        var off = Assert.IsType<ProtoOAExecutionEvent>(await client.AskAsync(new ProtoOAAmendPositionSLTPReq
+        {
+            CtidTraderAccountId = Credentials.AccountId, PositionId = id, StopLoss = 1.099, // no trailing field: off, as TM sends it
+        }));
+        Assert.False(off.Position.TrailingStopLoss);
+        Assert.False(broker.Positions().Single().Trailing);
+    }
+
+    [Fact]
     public async Task Past_candles_are_moved_into_real_time()
     {
         var (client, clock, _) = await StartAsync();

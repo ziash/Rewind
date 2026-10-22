@@ -9,7 +9,8 @@ const $ = id => document.getElementById(id);
 
 let info, view = { symbol: null, tf: null }, digits = 5;
 let data = [], noMoreOlder = false, loadingOlder = false, loadSeq = 0;
-let levelLines = [], picking = null; // null | 'level' | 'sl' | 'tp'
+let levelLines = [], picking = null; // null | 'level' | 'price' | 'sl' | 'tp'
+let orderType = 'market';            // the ticket's order type: market, limit or stop (spec §5)
 let account = null, session = null;
 const tradeLines = new Map(); // key → price line of positions, orders, ask and the ticket's SL / TP
 let drag = null;              // { key, line, price, apply(price) } while a line is being dragged
@@ -118,8 +119,8 @@ function setView(symbol, tf) {
   $('levelSymbol').textContent = symbol;
   $('tradeSymbol').textContent = symbol;
   const step = 1 / 10 ** digits;
-  $('sl').step = $('tp').step = step;
-  if (symbolChanged) { $('sl').value = ''; $('tp').value = ''; }
+  $('sl').step = $('tp').step = $('price').step = step;
+  if (symbolChanged) { $('sl').value = ''; $('tp').value = ''; $('price').value = ''; }
   const spec = specOf(symbol);
   if (spec) $('lots').min = $('lots').step = spec.stepVolume / spec.lotSize;
 }
@@ -185,14 +186,17 @@ function renderPositions(positions) {
       row.dataset.id = p.id;
       row.innerHTML = `<td>${p.id}</td><td>${p.symbol}</td><td>${p.side}</td><td class="lotsCell"></td><td>${fmt(p.entry, d)}</td>` +
         `<td><input class="sl" type="number" step="${1 / 10 ** d}" placeholder="none"></td>` +
+        `<td><input class="trail" type="checkbox" title="Trailing stop"></td>` +
         `<td><input class="tp" type="number" step="${1 / 10 ** d}" placeholder="none"></td>` +
         `<td class="price"></td><td class="pips"></td><td class="pnl"></td><td class="label"></td>` +
         `<td class="lots"><input class="closeLots" type="number" step="0.01" min="0.01"></td><td><button class="close">Close</button></td>`;
       const protect = () => {
         const sl = row.querySelector('.sl').value, tp = row.querySelector('.tp').value;
-        post(`/api/positions/${p.id}/protection`, { stopLoss: sl === '' ? null : +sl, takeProfit: tp === '' ? null : +tp });
+        post(`/api/positions/${p.id}/protection`,
+          { stopLoss: sl === '' ? null : +sl, takeProfit: tp === '' ? null : +tp, trailing: row.querySelector('.trail').checked });
       };
       row.querySelector('.sl').onchange = protect;
+      row.querySelector('.trail').onchange = protect;
       row.querySelector('.tp').onchange = protect;
       row.querySelector('.close').onclick = () => {
         const lots = row.querySelector('.closeLots').value;
@@ -202,6 +206,8 @@ function renderPositions(positions) {
     rows.delete(String(p.id));
     row.querySelector('.lotsCell').textContent = p.lots.toFixed(2);
     setInput(row.querySelector('.sl'), fmt(p.stopLoss, d));
+    row.querySelector('.trail').checked = p.trailing;
+    row.querySelector('.trail').disabled = p.stopLoss == null;
     setInput(row.querySelector('.tp'), fmt(p.takeProfit, d));
     setInput(row.querySelector('.closeLots'), p.lots.toFixed(2));
     row.querySelector('.price').textContent = fmt(p.price, d);
@@ -222,16 +228,40 @@ function setInput(input, value) {
   input.value = value;
 }
 
+/** Pending orders: price, SL / TP and trailing editable (sent together, spec §7), Cancel. */
 function renderOrders(orders) {
   $('orders').hidden = orders.length === 0;
-  $('orders').querySelector('tbody').replaceChildren(...orders.map(o => {
+  const body = $('orders').querySelector('tbody');
+  const rows = new Map([...body.rows].map(r => [r.dataset.id, r]));
+  for (const o of orders) {
     const d = specOf(o.symbol)?.digits ?? 5;
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${o.id}</td><td>${o.symbol}</td><td>${o.side}-stop</td><td>${o.lots.toFixed(2)}</td><td>${fmt(o.price, d)}</td><td></td><td><button>Cancel</button></td>`;
-    tr.cells[5].textContent = o.label || 'manual';
-    tr.querySelector('button').onclick = () => call('DELETE', `/api/orders/${o.id}`).then(clearError).catch(showError);
-    return tr;
-  }));
+    let row = rows.get(String(o.id));
+    if (!row) {
+      row = body.insertRow();
+      row.dataset.id = o.id;
+      const input = cls => `<td><input class="${cls}" type="number" step="${1 / 10 ** d}" placeholder="none"></td>`;
+      row.innerHTML = `<td>${o.id}</td><td>${o.symbol}</td><td>${o.name}</td><td>${o.lots.toFixed(2)}</td>` +
+        input('price') + input('sl') + `<td><input class="trail" type="checkbox" title="Trailing stop once filled"></td>` + input('tp') +
+        `<td class="label"></td><td><button class="cancel">Cancel</button></td>`;
+      const amend = () => {
+        const v = cls => row.querySelector('.' + cls).value;
+        post(`/api/orders/${o.id}/amend`, {
+          price: +v('price'), stopLoss: v('sl') === '' ? null : +v('sl'), takeProfit: v('tp') === '' ? null : +v('tp'),
+          trailing: row.querySelector('.trail').checked,
+        });
+      };
+      for (const cls of ['price', 'sl', 'trail', 'tp']) row.querySelector('.' + cls).onchange = amend;
+      row.querySelector('.cancel').onclick = () => call('DELETE', `/api/orders/${o.id}`).then(clearError).catch(showError);
+    }
+    rows.delete(String(o.id));
+    setInput(row.querySelector('.price'), fmt(o.price, d));
+    setInput(row.querySelector('.sl'), fmt(o.stopLoss, d));
+    row.querySelector('.trail').checked = o.trailing;
+    row.querySelector('.trail').disabled = o.stopLoss == null;
+    setInput(row.querySelector('.tp'), fmt(o.takeProfit, d));
+    row.querySelector('.label').textContent = o.label || 'manual';
+  }
+  for (const r of rows.values()) r.remove();
 }
 
 function renderEvents(events) {
@@ -262,8 +292,13 @@ function drawTradeLines(a, q) {
     if (p.stopLoss != null) want(`s${p.id}`, { price: p.stopLoss, color: css('--down'), lineStyle: LWC.LineStyle.Dashed, title: `SL #${p.id}` });
     if (p.takeProfit != null) want(`t${p.id}`, { price: p.takeProfit, color: css('--up'), lineStyle: LWC.LineStyle.Dashed, title: `TP #${p.id}` });
   }
-  for (const o of a.orders.filter(o => o.symbol === view.symbol))
-    want(`o${o.id}`, { price: o.price, color: css('--order'), lineStyle: LWC.LineStyle.Dashed, title: `#${o.id} ${o.side}-stop ${o.lots.toFixed(2)}` });
+  for (const o of a.orders.filter(o => o.symbol === view.symbol)) {
+    want(`o${o.id}`, { price: o.price, color: css('--order'), lineStyle: LWC.LineStyle.Dashed, title: `#${o.id} ${o.name} ${o.lots.toFixed(2)}` });
+    if (o.stopLoss != null) want(`os${o.id}`, { price: o.stopLoss, color: css('--down'), lineStyle: LWC.LineStyle.Dotted, title: `SL #${o.id}` });
+    if (o.takeProfit != null) want(`ot${o.id}`, { price: o.takeProfit, color: css('--up'), lineStyle: LWC.LineStyle.Dotted, title: `TP #${o.id}` });
+  }
+  if (orderType !== 'market' && $('price').value !== '')
+    want('ticketPrice', { price: +$('price').value, color: css('--order'), lineStyle: LWC.LineStyle.SparseDotted, title: `new ${orderType}` });
   if ($('sl').value !== '') want('ticketSl', { price: +$('sl').value, color: css('--down'), lineStyle: LWC.LineStyle.SparseDotted, title: 'new SL' });
   if ($('tp').value !== '') want('ticketTp', { price: +$('tp').value, color: css('--up'), lineStyle: LWC.LineStyle.SparseDotted, title: 'new TP' });
   for (const [key, line] of tradeLines) {
@@ -273,14 +308,23 @@ function drawTradeLines(a, q) {
 
 /** Lines that can be dragged: a position's SL / TP, a pending order. Returns what dropping it at a price does. */
 function draggable(key) {
-  const id = +key.slice(1);
-  if (key[0] === 's' || key[0] === 't') {
+  const [, kind, num] = /^(s|t|o|os|ot)(\d+)$/.exec(key) ?? [];
+  const id = +num;
+  if (kind === 's' || kind === 't') {
     const p = account.positions.find(x => x.id === id);
     if (!p) return null;
-    return price => post(`/api/positions/${id}/protection`,
-      key[0] === 's' ? { stopLoss: price, takeProfit: p.takeProfit } : { stopLoss: p.stopLoss, takeProfit: price });
+    return price => post(`/api/positions/${id}/protection`, kind === 's'
+      ? { stopLoss: price, takeProfit: p.takeProfit, trailing: p.trailing }
+      : { stopLoss: p.stopLoss, takeProfit: price, trailing: p.trailing });
   }
-  if (key[0] === 'o') return price => post(`/api/orders/${id}/amend`, { price });
+  if (kind?.[0] === 'o') {
+    const o = account.orders.find(x => x.id === id);
+    if (!o) return null;
+    const now = { price: o.price, stopLoss: o.stopLoss, takeProfit: o.takeProfit, trailing: o.trailing };
+    const field = { o: 'price', os: 'stopLoss', ot: 'takeProfit' }[kind];
+    return price => post(`/api/orders/${id}/amend`, { ...now, [field]: price });
+  }
+  if (key === 'ticketPrice') return price => { $('price').value = fmt(price); drawTradeLines(account, account.quotes[view.symbol]); };
   if (key === 'ticketSl') return price => { $('sl').value = fmt(price); drawTradeLines(account, account.quotes[view.symbol]); };
   if (key === 'ticketTp') return price => { $('tp').value = fmt(price); drawTradeLines(account, account.quotes[view.symbol]); };
   return null;
@@ -288,7 +332,7 @@ function draggable(key) {
 
 function lineNear(y) {
   for (const [key, line] of tradeLines) {
-    if (!/^(s|t|o)\d+$|^ticket/.test(key)) continue;
+    if (!/^(s|t|o|os|ot)\d+$|^ticket/.test(key)) continue;
     const ly = series.priceToCoordinate(line.options().price);
     if (ly != null && Math.abs(ly - y) <= 5 && draggable(key)) return { key, line };
   }
@@ -358,6 +402,7 @@ function setPicking(what) {
   picking = what;
   chartEl.classList.toggle('picking', !!what);
   $('addLevel').classList.toggle('on', what === 'level');
+  $('pickPrice').classList.toggle('on', what === 'price');
   $('pickSl').classList.toggle('on', what === 'sl');
   $('pickTp').classList.toggle('on', what === 'tp');
 }
@@ -369,7 +414,7 @@ chart.subscribeClick(p => {
   setPicking(null);
   if (price == null) return;
   const rounded = roundPrice(price);
-  if (what === 'sl' || what === 'tp') {
+  if (what === 'price' || what === 'sl' || what === 'tp') {
     $(what).value = fmt(rounded);
     if (account) drawTradeLines(account, account.quotes[view.symbol]);
     return;
@@ -411,17 +456,46 @@ $('sessionForm').addEventListener('submit', e => {
 // ---- controls -----------------------------------------------------------------------------------------------
 function playing() { return $('play').classList.contains('on'); }
 
+/** Sends the ticket: a market order, or a pending limit / stop order at the order price (spec §5, §7). */
 function order(side) {
-  const sl = $('sl').value, tp = $('tp').value;
-  call('POST', '/api/orders/market', {
+  const sl = $('sl').value, tp = $('tp').value, price = $('price').value;
+  const body = {
     symbol: view.symbol, side, lots: +$('lots').value,
-    stopLoss: sl === '' ? null : +sl, takeProfit: tp === '' ? null : +tp,
-  }).then(() => { clearError(); $('sl').value = ''; $('tp').value = ''; if (account) renderAccount(account); }).catch(showError);
+    stopLoss: sl === '' ? null : +sl, takeProfit: tp === '' ? null : +tp, trailing: $('trailing').checked,
+  };
+  if (orderType !== 'market' && price === '') { showError(new Error('Enter the order price (or pick it on the chart with ⌖)')); return; }
+  const sent = orderType === 'market'
+    ? call('POST', '/api/orders/market', body)
+    : call('POST', '/api/orders/pending', { ...body, type: orderType, price: +price });
+  sent.then(() => {
+    clearError();
+    for (const f of ['sl', 'tp', 'price']) $(f).value = '';
+    $('trailing').checked = false;
+    if (account) renderAccount(account);
+  }).catch(showError);
 }
 
+const typeHints = {
+  market: "On the chart, drag a position's SL / TP line (or an order) to move it.",
+  limit: 'Limit: buy below the ask (a pullback), sell above the bid (a rally). SL / TP go to the position when it fills.',
+  stop: 'Stop: buy above the ask (a breakout), sell below the bid (a breakdown). SL / TP go to the position when it fills.',
+};
+function setOrderType(type) {
+  orderType = type;
+  for (const b of $('orderType').children) b.classList.toggle('on', b.dataset.type === type);
+  $('priceField').hidden = type === 'market';
+  const suffix = type === 'market' ? '' : ' ' + type.toUpperCase();
+  $('buyText').textContent = 'BUY' + suffix;
+  $('sellText').textContent = 'SELL' + suffix;
+  $('typeHint').textContent = typeHints[type];
+  if (account) drawTradeLines(account, account.quotes[view.symbol]);
+}
+
+for (const b of $('orderType').children) b.onclick = () => setOrderType(b.dataset.type);
 $('buy').onclick = () => order('buy');
 $('sell').onclick = () => order('sell');
-$('sl').oninput = $('tp').oninput = () => account && drawTradeLines(account, account.quotes[view.symbol]);
+$('sl').oninput = $('tp').oninput = $('price').oninput = () => account && drawTradeLines(account, account.quotes[view.symbol]);
+$('pickPrice').onclick = () => setPicking(picking === 'price' ? null : 'price');
 $('pickSl').onclick = () => setPicking(picking === 'sl' ? null : 'sl');
 $('pickTp').onclick = () => setPicking(picking === 'tp' ? null : 'tp');
 $('closeAll').onclick = () => { if (confirm('Close every position and cancel every order?')) post('/api/positions/close-all'); };

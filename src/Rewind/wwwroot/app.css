@@ -83,6 +83,10 @@ td.lots input { width: 56px; }
 .fields { display: grid; gap: 6px; }
 .fields label { display: grid; gap: 2px; color: var(--muted); }
 .fields .group input { flex: 1; }
+.fields label.check { display: flex; gap: 6px; align-items: center; justify-content: flex-start; }
+.fields label.check input, td input[type=checkbox] { width: auto; flex: none; }
+.fields label[hidden] { display: none; }
+.types { display: grid; grid-template-columns: repeat(3, 1fr); margin-bottom: 6px; }
 #events { list-style: none; padding: 0; margin: 0; font-size: 12px; }
 #events li { padding: 3px 0; border-bottom: 1px solid var(--line); }
 #events time { color: var(--muted); margin-right: 4px; font-variant-numeric: tabular-nums; }

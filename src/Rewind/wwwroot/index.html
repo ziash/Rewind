@@ -39,12 +39,12 @@
       </div>
       <div class="tables">
         <table id="positions">
-          <thead><tr><th>ID</th><th>Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>SL</th><th>TP</th><th>Price</th><th>Pips</th><th>P/L $</th><th>Label</th><th>Close lots</th><th></th></tr></thead>
+          <thead><tr><th>ID</th><th>Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>SL</th><th title="Trailing stop: the stop-loss follows the price">Trail</th><th>TP</th><th>Price</th><th>Pips</th><th>P/L $</th><th>Label</th><th>Close lots</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
         <p id="noPositions" class="hint">No open positions.</p>
         <table id="orders" hidden>
-          <thead><tr><th>Order</th><th>Symbol</th><th>Type</th><th>Lots</th><th>Price</th><th>Label</th><th></th></tr></thead>
+          <thead><tr><th>Order</th><th>Symbol</th><th>Type</th><th>Lots</th><th>Price</th><th>SL</th><th title="Trailing stop once filled">Trail</th><th>TP</th><th>Label</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -52,16 +52,23 @@
 
     <aside>
       <h2>Trade <small id="tradeSymbol"></small></h2>
+      <div id="orderType" class="group types" role="group" aria-label="Order type">
+        <button data-type="market" class="on" title="Fill now: buy at the ask, sell at the bid">Market</button>
+        <button data-type="limit" title="Pending: buy below the ask (a pullback), sell above the bid (a rally)">Limit</button>
+        <button data-type="stop" title="Pending: buy above the ask (a breakout), sell below the bid (a breakdown)">Stop</button>
+      </div>
       <div class="ticket">
-        <button id="sell" class="sell"><span>SELL</span><b id="bid">—</b></button>
-        <button id="buy" class="buy"><span>BUY</span><b id="ask">—</b></button>
+        <button id="sell" class="sell"><span id="sellText">SELL</span><b id="bid">—</b></button>
+        <button id="buy" class="buy"><span id="buyText">BUY</span><b id="ask">—</b></button>
       </div>
       <div class="fields">
+        <label id="priceField" hidden>Order price <span class="group"><input id="price" type="number" step="any" placeholder="price"><button id="pickPrice" title="Pick the price on the chart">⌖</button></span></label>
         <label>Lots <input id="lots" type="number" min="0.01" step="0.01" value="0.10"></label>
         <label>Stop-loss <span class="group"><input id="sl" type="number" step="any" placeholder="none"><button id="pickSl" title="Pick the price on the chart">⌖</button></span></label>
+        <label class="check" title="The stop-loss follows the price at its distance, only in the trade's favour (held by the broker)"><input id="trailing" type="checkbox"> Trailing stop</label>
         <label>Take-profit <span class="group"><input id="tp" type="number" step="any" placeholder="none"><button id="pickTp" title="Pick the price on the chart">⌖</button></span></label>
       </div>
-      <p class="hint">On the chart, drag a position's SL / TP line (or an order) to move it.</p>
+      <p id="typeHint" class="hint">On the chart, drag a position's SL / TP line (or an order) to move it.</p>
 
       <h2>Levels <small id="levelSymbol"></small></h2>
       <div class="group">
