@@ -9,7 +9,7 @@ A chart in the browser replays past prices: scroll back, go to any date, switch 
 | Status | **Steps 1–6 built** — history downloader, chart, simulated broker with order panel and sessions, TM trading on it, exact mode and TM's results per leg, pending orders and trailing stops |
 | Specification | [docs/spec.md](docs/spec.md) — the single source of truth (goal, design, build steps, open questions, history) |
 | Price history | Dukascopy free data feed: 24 months, AUDJPY, EURGBP, EURUSD, GBPJPY, BTCUSD, ETHUSD, bid and ask; downloaded by Rewind's own tool |
-| Runs on | Ubuntu, .NET 10; GUI at `http://localhost:5180` in the browser; broker side for TM at `localhost:5036` |
+| Runs on | Ubuntu or Windows, .NET 10; GUI at `http://localhost:5180` in the browser; broker side for TM at `localhost:5036` |
 | Data | `~/rewind/` (history, sessions, config) — outside the repo |
 | Related | [Trader](https://github.com/ziash/Trader) — the trading bots. Rewind shares no code with it (small pieces are copied) and changes nothing there except three opt-in settings (spec §9), done in Trader on the owner's go |
 
@@ -50,7 +50,13 @@ With Rewind running, start the real TM from the Trader repo against it:
 ~/rewind/tm/run-tm.sh          # Ctrl+C stops it; the header shows "TM on" while it is connected
 ```
 
-Rewind made this script, TM's fake secrets and its `tm.json` in `~/rewind/tm/`, and its TLS certificate in `~/rewind/certs/`, on first start (if Rewind's log says `tm.json` misses symbols, add them to its `"symbols"`). Open a trade in the browser and TM mirrors and hedges it like on the demo accounts.
+On Windows, in PowerShell (`~\rewind` is `C:\Users\<name>\rewind`; the Trader repo is expected in `~\code\Trader`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$HOME\rewind\tm\run-tm.ps1"
+```
+
+Rewind made these scripts, TM's fake secrets (with `CTRADER_CA_FILE`, through which TM trusts Rewind's certificate; nothing is installed in the system) and its `tm.json` in `~/rewind/tm/`, and its TLS certificate in `~/rewind/certs/`, on first start (if Rewind's log says `tm.json` misses symbols, add them to its `"symbols"`). Open a trade in the browser and TM mirrors and hedges it like on the demo accounts.
 
 **Exact mode (step 5)** — the **Exact** button in the footer, on by default: while TM is connected, each price step of a symbol with an open position or order waits until TM has had its turn (about 5 s per candle; the footer says "Exact: waiting for TM"), so TM acts as it would live at any speed. Flat stretches and other symbols go at full speed; the skips are never paced. Off = Fast: TM may act late.
 

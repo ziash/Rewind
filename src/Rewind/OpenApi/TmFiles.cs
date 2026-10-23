@@ -17,12 +17,15 @@ public sealed record Credentials(string ClientId, string ClientSecret)
 
 /// <summary>
 /// Writes ~/rewind/tm/ on first start (spec §9): secrets.env for TM (CTRADER_ENV=replay, localhost, fake credentials,
-/// mode 600), tm.json (the Rewind account and its symbols; TM's rule values stay at their defaults) and run-tm.sh.
+/// mode 600, with CTRADER_CA_FILE naming Rewind's certificate authority), tm.json (the Rewind account and its symbols;
+/// TM's rule values stay at their defaults), run-tm.sh (Linux) and run-tm.ps1 (Windows).
 /// Never touches anything of the Trader project.
 /// </summary>
 public static class TmFiles
 {
-    public static Credentials Ensure(string dir, int port, IEnumerable<string> symbols, Action<string> log)
+    public const string CaFileKey = "CTRADER_CA_FILE";
+
+    public static Credentials Ensure(string dir, int port, string caFile, IEnumerable<string> symbols, Action<string> log)
     {
         Directory.CreateDirectory(dir);
         var secrets = Path.Combine(dir, "secrets.env");
@@ -30,7 +33,7 @@ public static class TmFiles
         {
             var text = $"""
                 # TM's secrets for Rewind (docs/spec.md §9) — fake values, accepted only by Rewind on this computer.
-                # Used by run-tm.sh through TRADER_SECRETS_FILE; TM writes refreshed tokens back here.
+                # Used by run-tm.sh / run-tm.ps1 through TRADER_SECRETS_FILE; TM writes refreshed tokens back here.
                 CTRADER_CLIENT_ID=rewind-client
                 CTRADER_CLIENT_SECRET={Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant()}
                 CTRADER_ACCESS_TOKEN={Credentials.NewToken()}
@@ -38,10 +41,18 @@ public static class TmFiles
                 CTRADER_ENV=replay
                 CTRADER_HOST=localhost
                 CTRADER_PORT={port}
+                {CaFileKey}={caFile}
 
                 """;
             WritePrivate(secrets, text);
             log($"Made TM's replay secrets in {secrets}");
+        }
+        else if (!File.ReadAllLines(secrets).Any(l => l.TrimStart().StartsWith(CaFileKey + "=", StringComparison.Ordinal)))
+        {
+            // Made by an older Rewind: add the authority, so TM trusts Rewind without SSL_CERT_FILE (and on Windows).
+            var text = File.ReadAllText(secrets);
+            WritePrivate(secrets, text + (text.EndsWith('\n') ? "" : "\n") + $"{CaFileKey}={caFile}\n");
+            log($"Added {CaFileKey} to TM's replay secrets in {secrets}");
         }
 
         var tm = Path.Combine(dir, "tm.json");
@@ -84,6 +95,24 @@ public static class TmFiles
                 """);
             if (!OperatingSystem.IsWindows())
                 File.SetUnixFileMode(run, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        var ps1 = Path.Combine(dir, "run-tm.ps1");
+        if (!File.Exists(ps1))
+        {
+            // Windows PowerShell runs no scripts by default; -ExecutionPolicy Bypass allows this one run only.
+            // CRLF and UTF-8 with BOM: Windows PowerShell 5.1 reads a file without a BOM in the local code page.
+            File.WriteAllText(ps1, """
+                # Runs TM from the Trader repo against Rewind (docs/spec.md §9). Start Rewind first, then:
+                #   powershell -ExecutionPolicy Bypass -File "$HOME\rewind\tm\run-tm.ps1"
+                # TRADER_REPO overrides where the Trader repo is (default ~\code\Trader). Ctrl+C stops TM.
+                $ErrorActionPreference = 'Stop'
+                $env:TRADER_SECRETS_FILE = Join-Path $PSScriptRoot 'secrets.env'
+                $repo = if ($env:TRADER_REPO) { $env:TRADER_REPO } else { Join-Path (Join-Path $HOME 'code') 'Trader' }
+                dotnet run --project (Join-Path (Join-Path $repo 'src') 'Trader.TM') -- --config-dir $PSScriptRoot @args
+                exit $LASTEXITCODE
+
+                """.ReplaceLineEndings("\r\n"), new UTF8Encoding(true));
         }
 
         return Read(secrets);

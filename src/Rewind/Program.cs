@@ -2,7 +2,7 @@
 // Step 2: the chart — timeframes, scroll back, go to, step / play, levels (spec §5, §6).
 // Step 3: the simulated broker and order panel — market orders, SL/TP, P/L, commission, sessions (spec §7, §8).
 // Step 4: the Open API server, so TM (Trader project) trades on Rewind like on a broker (spec §9, §10):
-// localhost:5036 (TLS); TM's files in ~/rewind/tm/ (run-tm.sh), the certificate in ~/rewind/certs/.
+// localhost:5036 (TLS); TM's files in ~/rewind/tm/ (run-tm.sh, run-tm.ps1), the certificate in ~/rewind/certs/.
 // Step 5: exact mode — price steps of symbols in a trade wait for TM (spec §6.2); TM's results in tm-trades.csv (spec §8).
 // Open http://localhost:5180.
 //
@@ -64,8 +64,10 @@ broker.Changed += () => updates.Broadcast(clock.State, false);
 sessions.OpenLast();
 
 void Info(string m) => log.LogInformation("{Message}", m);
-var certificate = Rewind.OpenApi.Certificates.Ensure(Path.Combine(root, "certs"), Info);
-var credentials = Rewind.OpenApi.TmFiles.Ensure(Path.Combine(root, "tm"), apiPort, specs.Keys.Where(history.ContainsKey), Info);
+var certsDir = Path.Combine(root, "certs");
+var certificate = Rewind.OpenApi.Certificates.Ensure(certsDir, Info);
+var credentials = Rewind.OpenApi.TmFiles.Ensure(Path.Combine(root, "tm"), apiPort, Rewind.OpenApi.Certificates.CaFile(certsDir),
+    specs.Keys.Where(history.ContainsKey), Info);
 var openApi = new Rewind.OpenApi.OpenApiServer(apiPort, certificate, credentials, broker, clock, history, Info);
 updates.TmConnections = () => openApi.Connections;
 openApi.ConnectionsChanged += () => updates.Broadcast(clock.State, false);

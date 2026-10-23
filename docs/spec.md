@@ -5,10 +5,10 @@
 | Item | Value |
 |---|---|
 | Status | **Steps 1–6 built** (history downloader 20-Oct-2026; chart, simulated broker and TM connection 21-Oct-2026; exact mode, TM's results, pending orders and trailing stops 22-Oct-2026) — §11 |
-| Document version | v0.8 (22-Oct-2026) — history in §15 |
+| Document version | v0.9 (23-Oct-2026) — history in §15 |
 | Owner | Zeeshan |
 | Repository | [github.com/ziash/Rewind](https://github.com/ziash/Rewind) (private) — separate from [Trader](https://github.com/ziash/Trader) |
-| Runs on | The Ubuntu laptop; browser GUI at `http://localhost:5180`; the broker side at `localhost:5036` |
+| Runs on | The Ubuntu laptop, or Windows on the same machine (v0.9); browser GUI at `http://localhost:5180`; the broker side at `localhost:5036` |
 | Data folder | `~/rewind/` (history, sessions, config, certificate) — outside the repo, separate from `~/tradebot/` |
 | Price history | Dukascopy (Swiss bank/broker) free data feed: 24 months, six symbols, bid and ask; downloaded by Rewind's own tool (§4) |
 
@@ -190,13 +190,14 @@ TM's **code is not changed**. Three small, opt-in changes were planned in the **
 |---|---|---|
 | T1 | A third environment **`replay`**: `CTRADER_HOST` / `CTRADER_PORT` from the secrets file, **only `localhost` / `127.0.0.1` / `::1` accepted** (checked when reading the file and again when connecting); refused with `demo`; `live` stays refused | TM must connect to Rewind instead of `demo.ctraderapi.com` — **built**, 9 tests |
 | T2 | Choose the secrets file with `TRADER_SECRETS_FILE`; default stays `~/.config/trader/secrets.env` | TM-for-Rewind must never read or rewrite the real tokens — **already in Trader** (since Phase 1) |
-| T3 | Trust Rewind's own certificate | The cTrader library always encrypts (TLS) and accepts only certificates the system trusts. **No code:** TM is started with `SSL_CERT_FILE` = `~/rewind/certs/bundle.pem` (the system's certificates plus Rewind's local authority); .NET on Linux honours it — **confirmed** |
+| T3 | Trust Rewind's own certificate | The cTrader library always encrypts (TLS) and accepts only certificates the system trusts. **First no code:** TM is started with `SSL_CERT_FILE` = `~/rewind/certs/bundle.pem` (the system's certificates plus Rewind's local authority); .NET on Linux honours it — **confirmed**. Windows has no such setting, so **since v0.9** (Trader open-code-pieces v1.5) `CTRADER_CA_FILE` in TM's secrets names `~/rewind/certs/ca.pem` and TM's replay connection trusts that authority only, on Linux and Windows; nothing is installed in the system |
 
 On the Rewind side, for TM (made by Rewind on its first start; never overwritten):
-- `~/rewind/tm/secrets.env` (mode 600) — `CTRADER_ENV=replay`, `CTRADER_HOST=localhost`, `CTRADER_PORT=5036`, and **fake** client ID, secret and tokens. Rewind checks the client ID and secret, and accepts any token it could have issued (`rewind-…`); they are worthless anywhere else. Rewind answers token refreshes with new fake tokens, which TM writes back into *this* file.
+- `~/rewind/tm/secrets.env` (mode 600) — `CTRADER_ENV=replay`, `CTRADER_HOST=localhost`, `CTRADER_PORT=5036`, `CTRADER_CA_FILE` (the full path of `~/rewind/certs/ca.pem`; added to a file made by an older Rewind on its next start), and **fake** client ID, secret and tokens. Rewind checks the client ID and secret, and accepts any token it could have issued (`rewind-…`); they are worthless anywhere else. Rewind answers token refreshes with new fake tokens, which TM writes back into *this* file.
 - `~/rewind/tm/tm.json` — TM's config for Rewind: the account **9000001** (broker name `rewind`) and the symbols with history; TM's rule values stay at their defaults (copy any you want to change in here). Never rewritten; Rewind's log says when it misses symbols that have history (add them to `"symbols"`).
 - `~/rewind/tm/run-tm.sh` — sets `TRADER_SECRETS_FILE` and `SSL_CERT_FILE` and starts TM from `~/code/Trader` (`TRADER_REPO` overrides) with `--config-dir ~/rewind/tm`.
-- `~/rewind/certs/` — `server.pfx` (Rewind's certificate for localhost, mode 600), `ca.pem` (Rewind's local authority; its private key is never stored), `bundle.pem` (system certificates + `ca.pem`).
+- `~/rewind/tm/run-tm.ps1` — the same for Windows PowerShell (`TRADER_SECRETS_FILE` only; TM finds the certificate through `CTRADER_CA_FILE`). Windows runs no scripts by default, so it is started with `-ExecutionPolicy Bypass`, which allows that one run and changes no setting.
+- `~/rewind/certs/` — `server.pfx` (Rewind's certificate for localhost, mode 600), `ca.pem` (Rewind's local authority; its private key is never stored), `bundle.pem` (system certificates + `ca.pem`, for `SSL_CERT_FILE`; on Windows only `ca.pem`, as there is no system file).
 - The header of the page shows **TM on / TM off** (a TM connected to the Open API).
 - TM's state and logs then land in `~/tradebot/run/tm/rewind-<account>.json` and `~/tradebot/logs/rewind/…` — kept apart from the demo accounts by the broker name `rewind`.
 
@@ -204,6 +205,12 @@ Start (Rewind running first):
 
 ```bash
 ~/rewind/tm/run-tm.sh
+```
+
+On Windows (PowerShell, `~` = `C:\Users\<name>`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$HOME\rewind\tm\run-tm.ps1"
 ```
 
 The TM service on the demo accounts can keep running at the same time: different account, different secrets, different state file.
@@ -285,3 +292,4 @@ Each step on the owner's go, each tested before the next.
 | v0.6 | 22 Oct 2026 | Step 5 built: exact mode waits for TM only on symbols in a trade and only while TM is connected (1.2 s, then 0.3 s of quiet, at most 5 s per price step; open question closed); TM results per leg in `tm-trades.csv`; trades closed over the Open API marked `Tm`. A replayed week with TM matched TM's own logs leg for leg. Full history of all six symbols in place (1-Oct-2024 → 19-Oct-2026) |
 | v0.7 | 22 Oct 2026 | Step 6 built: pending orders by hand — buy/sell limit and stop, each with stop-loss / take-profit for its position — and trailing stops, in the order panel and over the Open API (§2, §5, §7, §10). Limits fill at their price or better (after a gap), stops at their price or worse; wrong-side limits refused with `TRADING_BAD_PRICES`. Tested live with TM v1.4 (trailing break-even stops) |
 | v0.8 | 22 Oct 2026 | TM's results (§8): a mirror labelled with the owner's order ID (`O<orderId>-MIR`, TM v1.5 mirror orders) is the MIR leg of the trade that order's position starts. Tested live: TM mirrored a manual sell-stop and buy-limit with orders of the same type and price, followed a move and a cancel, and both sell-stops filled as one trade with both legs in `tm-trades.csv` (session `mirror-orders`) |
+| v0.9 | 23 Oct 2026 | Windows (owner: the laptop also boots Windows): TM's secrets name Rewind's certificate authority (`CTRADER_CA_FILE`, T3), so TM trusts Rewind without `SSL_CERT_FILE` (Trader open-code-pieces v1.5); Rewind adds the line to an existing `secrets.env` and also writes `run-tm.ps1`. Not yet run on Windows itself |
