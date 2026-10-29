@@ -5,9 +5,9 @@
 | Item | Value |
 |---|---|
 | Status | **Steps 1–6 built** (history downloader 20-Oct-2026; chart, simulated broker and TM connection 21-Oct-2026; exact mode, TM's results, pending orders and trailing stops 22-Oct-2026) — §11 |
-| Document version | v0.9 (23-Oct-2026) — history in §15 |
+| Document version | v0.10 (29-Oct-2026) — history in §15 |
 | Owner | Zeeshan |
-| Repository | [github.com/ziash/Rewind](https://github.com/ziash/Rewind) (private) — separate from [Trader](https://github.com/ziash/Trader) |
+| Repository | [github.com/ziash/Rewind](https://github.com/ziash/Rewind) (public) — separate from [Trader](https://github.com/ziash/Trader) |
 | Runs on | The Ubuntu laptop, or Windows on the same machine (v0.9); browser GUI at `http://localhost:5180`; the broker side at `localhost:5036` |
 | Data folder | `~/rewind/` (history, sessions, config, certificate) — outside the repo, separate from `~/tradebot/` |
 | Price history | Dukascopy (Swiss bank/broker) free data feed: 24 months, six symbols, bid and ask; downloaded by Rewind's own tool (§4) |
@@ -293,3 +293,4 @@ Each step on the owner's go, each tested before the next.
 | v0.7 | 22 Oct 2026 | Step 6 built: pending orders by hand — buy/sell limit and stop, each with stop-loss / take-profit for its position — and trailing stops, in the order panel and over the Open API (§2, §5, §7, §10). Limits fill at their price or better (after a gap), stops at their price or worse; wrong-side limits refused with `TRADING_BAD_PRICES`. Tested live with TM v1.4 (trailing break-even stops) |
 | v0.8 | 22 Oct 2026 | TM's results (§8): a mirror labelled with the owner's order ID (`O<orderId>-MIR`, TM v1.5 mirror orders) is the MIR leg of the trade that order's position starts. Tested live: TM mirrored a manual sell-stop and buy-limit with orders of the same type and price, followed a move and a cancel, and both sell-stops filled as one trade with both legs in `tm-trades.csv` (session `mirror-orders`) |
 | v0.9 | 23 Oct 2026 | Windows (owner: the laptop also boots Windows): TM's secrets name Rewind's certificate authority (`CTRADER_CA_FILE`, T3), so TM trusts Rewind without `SSL_CERT_FILE` (Trader open-code-pieces v1.5); Rewind adds the line to an existing `secrets.env` and also writes `run-tm.ps1`. Not yet run on Windows itself |
+| v0.10 | 29 Oct 2026 | Repository made public (owner); no secrets in its history |
