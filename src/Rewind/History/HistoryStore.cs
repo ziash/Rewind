@@ -37,10 +37,11 @@ public sealed class SymbolHistory(SymbolInfo symbol, Bar[] bars)
 /// <summary>Loads ~/rewind/history/&lt;SYMBOL&gt;/*.m5.csv (written by rewind-download) into memory.</summary>
 public static class HistoryStore
 {
-    public static Dictionary<string, SymbolHistory> Load(string dir, Action<string> log)
+    /// <param name="only">Load just these symbols (rewind-lab); null = all of them.</param>
+    public static Dictionary<string, SymbolHistory> Load(string dir, Action<string> log, IReadOnlyCollection<string>? only = null)
     {
         var result = new Dictionary<string, SymbolHistory>();
-        foreach (var s in SymbolInfo.All)
+        foreach (var s in SymbolInfo.All.Where(s => only is null || only.Contains(s.Name)))
         {
             var folder = Path.Combine(dir, s.Name);
             var files = Directory.Exists(folder) ? Directory.GetFiles(folder, "*.m5.csv").Order().ToList() : [];

@@ -10,6 +10,22 @@
     { "name": "EURUSD", "base": "EUR", "quote": "USD", "digits": 5, "pipPosition": 4, "lotSize": 10000000, "minVolume": 100000, "stepVolume": 100000, "maxVolume": 10000000000, "commissionPerMillionUsd": 30 },
     { "name": "GBPJPY", "base": "GBP", "quote": "JPY", "digits": 3, "pipPosition": 2, "lotSize": 10000000, "minVolume": 100000, "stepVolume": 100000, "maxVolume": 500000000, "commissionPerMillionUsd": 30 },
     { "name": "BTCUSD", "base": "BTC", "quote": "USD", "digits": 2, "pipPosition": 2, "lotSize": 100, "minVolume": 1, "stepVolume": 1, "maxVolume": 1000, "commissionPerMillionUsd": 0 },
-    { "name": "ETHUSD", "base": "ETH", "quote": "USD", "digits": 2, "pipPosition": 2, "lotSize": 100, "minVolume": 1, "stepVolume": 1, "maxVolume": 1000, "commissionPerMillionUsd": 0 }
+    { "name": "ETHUSD", "base": "ETH", "quote": "USD", "digits": 2, "pipPosition": 2, "lotSize": 100, "minVolume": 1, "stepVolume": 1, "maxVolume": 1000, "commissionPerMillionUsd": 0 },
+    // Scout's other symbols (scout-lens.md §8 step 1, 08-Nov-2026). Digits from Pepperstone's prices; lot sizes and
+    // volumes are usual CFD values, NOT read from a broker, commission left at 0: good enough for results in R
+    // (rewind-lab outcomes), to be checked against the broker before trading them by hand with TM.
+    { "name": "GBPUSD", "base": "GBP", "quote": "USD", "digits": 5, "pipPosition": 4, "lotSize": 10000000, "minVolume": 100000, "stepVolume": 100000, "maxVolume": 10000000000, "commissionPerMillionUsd": 30 },
+    { "name": "USDJPY", "base": "USD", "quote": "JPY", "digits": 3, "pipPosition": 2, "lotSize": 10000000, "minVolume": 100000, "stepVolume": 100000, "maxVolume": 10000000000, "commissionPerMillionUsd": 30 },
+    { "name": "EURJPY", "base": "EUR", "quote": "JPY", "digits": 3, "pipPosition": 2, "lotSize": 10000000, "minVolume": 100000, "stepVolume": 100000, "maxVolume": 500000000, "commissionPerMillionUsd": 30 },
+    { "name": "XAUUSD", "base": "XAU", "quote": "USD", "digits": 2, "pipPosition": 1, "lotSize": 10000, "minVolume": 100, "stepVolume": 100, "maxVolume": 1000000, "commissionPerMillionUsd": 0 },
+    { "name": "XAGUSD", "base": "XAG", "quote": "USD", "digits": 3, "pipPosition": 2, "lotSize": 500000, "minVolume": 5000, "stepVolume": 5000, "maxVolume": 50000000, "commissionPerMillionUsd": 0 },
+    { "name": "XPTUSD", "base": "XPT", "quote": "USD", "digits": 2, "pipPosition": 1, "lotSize": 10000, "minVolume": 100, "stepVolume": 100, "maxVolume": 1000000, "commissionPerMillionUsd": 0 },
+    { "name": "US500", "base": "US500", "quote": "USD", "digits": 2, "pipPosition": 0, "lotSize": 100, "minVolume": 10, "stepVolume": 10, "maxVolume": 100000, "commissionPerMillionUsd": 0 },
+    { "name": "USTEC", "base": "USTEC", "quote": "USD", "digits": 2, "pipPosition": 0, "lotSize": 100, "minVolume": 10, "stepVolume": 10, "maxVolume": 100000, "commissionPerMillionUsd": 0 },
+    { "name": "DE40", "base": "DE40", "quote": "EUR", "digits": 2, "pipPosition": 0, "lotSize": 100, "minVolume": 10, "stepVolume": 10, "maxVolume": 100000, "commissionPerMillionUsd": 0 },
+    { "name": "XTIUSD", "base": "XTI", "quote": "USD", "digits": 3, "pipPosition": 2, "lotSize": 10000, "minVolume": 100, "stepVolume": 100, "maxVolume": 1000000, "commissionPerMillionUsd": 0 },
+    { "name": "XBRUSD", "base": "XBR", "quote": "USD", "digits": 3, "pipPosition": 2, "lotSize": 10000, "minVolume": 100, "stepVolume": 100, "maxVolume": 1000000, "commissionPerMillionUsd": 0 },
+    { "name": "XNGUSD", "base": "XNG", "quote": "USD", "digits": 3, "pipPosition": 3, "lotSize": 1000000, "minVolume": 10000, "stepVolume": 10000, "maxVolume": 100000000, "commissionPerMillionUsd": 0 },
+    { "name": "SOLUSD", "base": "SOL", "quote": "USD", "digits": 2, "pipPosition": 2, "lotSize": 100, "minVolume": 1, "stepVolume": 1, "maxVolume": 100000, "commissionPerMillionUsd": 0 }
   ]
 }

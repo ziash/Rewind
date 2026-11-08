@@ -460,11 +460,12 @@ public sealed class SimBroker : IMarket
             : Math.Round(volume / 100.0 * price * QuoteToUsd(spec.Quote) * spec.CommissionPerMillionUsd / 1_000_000, 2);
     }
 
-    /// <summary>USD value of 1 unit of the quote currency: GBPUSD = EURUSD / EURGBP, USDJPY = GBPJPY / GBPUSD (spec §7).</summary>
+    /// <summary>USD value of 1 unit of the quote currency: GBPUSD = EURUSD / EURGBP, USDJPY = GBPJPY / GBPUSD, EUR = EURUSD (spec §7).</summary>
     private double QuoteToUsd(string currency) => currency switch
     {
         "USD" => 1,
         "GBP" => GbpUsd(),
+        "EUR" => _quotes.TryGetValue("EURUSD", out var eu) && eu.Bid > 0 ? Mid(eu) : Fallback("EURUSD"),
         "JPY" => _quotes.TryGetValue("GBPJPY", out var gj) && gj.Bid > 0 ? GbpUsd() / Mid(gj) : 1 / Fallback("USDJPY"),
         _ => throw new BrokerException("UNSUPPORTED", $"No conversion from {currency} to USD"),
     };

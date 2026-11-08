@@ -29,7 +29,7 @@ internal sealed class Feed(string cacheDir, TimeSpan interval, Action<string> lo
 
     /// <summary>Feed URL of a day file. The month in the path counts from 00 (January = 00).</summary>
     public static string Url(Instrument i, DateOnly day, Side side) =>
-        $"{BaseUrl}/{i.Name}/{day.Year:0000}/{day.Month - 1:00}/{day.Day:00}/{(side == Side.Bid ? "BID" : "ASK")}_candles_min_1.bi5";
+        $"{BaseUrl}/{i.Feed}/{day.Year:0000}/{day.Month - 1:00}/{day.Day:00}/{(side == Side.Bid ? "BID" : "ASK")}_candles_min_1.bi5";
 
     /// <summary>Raw cache path; an empty file means "no data that day".</summary>
     public string CachePath(Instrument i, DateOnly day, Side side) =>

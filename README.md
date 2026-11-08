@@ -25,12 +25,22 @@ Browser chart + order panel  ──►  Rewind (replay clock + simulated broker)
 
 ```bash
 dotnet build src/Rewind.Download -c Release -o ~/rewind/bin/download   # its own copy: rebuilding the repo cannot disturb a running download
-~/rewind/bin/download/rewind-download              # 24 months, six symbols (about 5 h; resumes; a re-run fetches missing days)
+~/rewind/bin/download/rewind-download              # 24 months, all 19 symbols (resumes; a re-run fetches missing days)
 ~/rewind/bin/download/rewind-download --build-only # rebuild the CSV files from the downloaded files
 ~/rewind/bin/download/rewind-download --help
 ```
 
 Output: `~/rewind/history/<SYMBOL>/<yyyy-MM>.m5.csv` (and `.m1.csv.gz`), opens in Google Sheets. Personal use only — never committed (except two small test sample files).
+
+## Scout's orders in R (step 7, `rewind-lab`)
+
+For Scout Lens in the Trader project (spec §7.1). Normally run through Trader's `scripts/lens-replay.sh`; by hand:
+
+```bash
+dotnet build src/Rewind.Lab -c Release -o ~/rewind/bin/lab
+~/rewind/bin/lab/rewind-lab candles --symbols EURUSD          # → ~/rewind/lab/candles/EURUSD-H1.csv, -H4, -D1
+~/rewind/bin/lab/rewind-lab outcomes ~/tradebot/lens/orders/*.orders.csv   # → ~/rewind/lab/outcomes.csv
+```
 
 ## The chart (step 2)
 

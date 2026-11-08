@@ -26,9 +26,14 @@ public static class Timeframes
             case Timeframe.M15: return Floor(utc, 15);
             case Timeframe.H1: return Floor(utc, 60);
         }
-        var shifted = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), NewYork) + TradingDayShift;
+        utc = DateTime.SpecifyKind(utc, DateTimeKind.Utc);
+        var shifted = TimeZoneInfo.ConvertTimeFromUtc(utc, NewYork) + TradingDayShift;
         var start = tf == Timeframe.D1 ? shifted.Date : shifted.Date.AddHours(shifted.Hour / 4 * 4);
-        return TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(start - TradingDayShift, DateTimeKind.Unspecified), NewYork);
+        var result = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(start - TradingDayShift, DateTimeKind.Unspecified), NewYork);
+        // In the hour New York's clock repeats (DST ends, a 01:00 H4 start) the start reads as the later 01:00, after the
+        // candle itself, and the 24/7 crypto charts got the same 4H candle over and over (found by Scout Lens's replay,
+        // 08-Nov-2026): then the start is measured back with this moment's offset, the earlier 01:00.
+        return result <= utc ? result : utc - (shifted - start);
     }
 
     private static DateTime Floor(DateTime utc, int minutes)

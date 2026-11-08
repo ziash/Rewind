@@ -44,6 +44,24 @@ public sealed class ReplayTests
         Assert.Equal(Utc(2026, 7, 13, 9, 0), Timeframes.CandleStart(Utc(2026, 7, 13, 9, 45), Timeframe.H1));
     }
 
+    /// <summary>Crypto trades through New York's clock changes: every candle starts at or before its own bars, and the
+    /// candles of a whole day around each change follow one another (spec §5; the bug Scout Lens's replay found).</summary>
+    [Theory]
+    [InlineData(2025, 11, 1)] // DST ends Sunday 2-Nov-2025, 02:00 New York
+    [InlineData(2026, 3, 7)]  // DST starts Sunday 8-Mar-2026
+    public void H4_and_D1_never_start_after_their_bars_across_clock_changes(int y, int mo, int d)
+    {
+        foreach (var tf in new[] { Timeframe.H4, Timeframe.D1 })
+        {
+            var start = Utc(y, mo, d, 0, 0);
+            var bars = Enumerable.Range(0, 3 * 288).Select(i => start.AddMinutes(5 * i)).ToList();
+            Assert.All(bars, t => Assert.True(Timeframes.CandleStart(t, tf) <= t));
+            var starts = bars.Select(t => Timeframes.CandleStart(t, tf)).Distinct().ToList();
+            Assert.Equal(starts.Order(), starts); // never back in time
+            Assert.True(starts.Count <= (tf == Timeframe.H4 ? 3 * 6 + 2 : 4), $"{tf}: {starts.Count} candles");
+        }
+    }
+
     [Fact]
     public void Nothing_after_the_cursor_and_the_last_candle_is_drawn_as_far_as_it_has_formed()
     {

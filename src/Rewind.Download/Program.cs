@@ -1,8 +1,8 @@
-// rewind-download (spec §4): downloads Dukascopy's free 1-minute bid and ask candles for the six symbols into a raw
+// rewind-download (spec §4): downloads Dukascopy's free 1-minute bid and ask candles for Rewind's symbols into a raw
 // cache, then writes one CSV pair per symbol and month: <yyyy-MM>.m1.csv.gz (1-minute) and <yyyy-MM>.m5.csv.
 // Polite: one request at a time; files already in the cache are never fetched again, so a re-run resumes.
 //
-//   rewind-download                         24 months up to yesterday (UTC), all six symbols
+//   rewind-download                         24 months up to yesterday (UTC), all symbols
 //   rewind-download --from 2026-09-01 --to 2026-09-30 --symbols EURUSD,BTCUSD
 //   rewind-download --build-only            rebuild the CSV files from the cache, no download
 //
@@ -12,12 +12,12 @@ using System.Diagnostics;
 using System.Globalization;
 using Rewind.Download;
 
-const string Usage = """
+var usage = $"""
     rewind-download — Dukascopy history for Rewind (docs/spec.md §4)
 
       --from <yyyy-MM-dd>     first day (default: 1st of the month 24 months ago)
       --to <yyyy-MM-dd>       last day (default: yesterday, UTC; today is never complete)
-      --symbols <A,B,…>       default: AUDJPY,EURGBP,EURUSD,GBPJPY,BTCUSD,ETHUSD
+      --symbols <A,B,…>       default: all ({string.Join(",", Instrument.All.Select(i => i.Name))})
       --dir <folder>          default: ~/rewind/history
       --interval-ms <ms>      pause between requests (default 1000)
       --build-only            only rebuild the CSV files from the downloaded files
@@ -46,7 +46,7 @@ try
             case "--dir": dir = Value(); break;
             case "--interval-ms": interval = TimeSpan.FromMilliseconds(int.Parse(Value(), CultureInfo.InvariantCulture)); break;
             case "--build-only": buildOnly = true; break;
-            case "--help" or "-h": Console.WriteLine(Usage); return 0;
+            case "--help" or "-h": Console.WriteLine(usage); return 0;
             default: throw new ArgumentException($"Unknown option {args[i]}");
         }
     }
@@ -57,7 +57,7 @@ try
 }
 catch (Exception ex) when (ex is ArgumentException or FormatException)
 {
-    Console.Error.WriteLine($"{ex.Message}\n\n{Usage}");
+    Console.Error.WriteLine($"{ex.Message}\n\n{usage}");
     return 2;
 }
 

@@ -4,13 +4,13 @@
 
 | Item | Value |
 |---|---|
-| Status | **Steps 1–6 built** (history downloader 20-Oct-2026; chart, simulated broker and TM connection 21-Oct-2026; exact mode, TM's results, pending orders and trailing stops 22-Oct-2026) — §11 |
-| Document version | v0.10 (29-Oct-2026) — history in §15 |
+| Status | **Steps 1–7 built** (history downloader 20-Oct-2026; chart, simulated broker and TM connection 21-Oct-2026; exact mode, TM's results, pending orders and trailing stops 22-Oct-2026; `rewind-lab` for Scout Lens 08-Nov-2026) — §11 |
+| Document version | v0.11 (08-Nov-2026) — history in §15 |
 | Owner | Zeeshan |
 | Repository | [github.com/ziash/Rewind](https://github.com/ziash/Rewind) (public) — separate from [Trader](https://github.com/ziash/Trader) |
 | Runs on | The Ubuntu laptop, or Windows on the same machine (v0.9); browser GUI at `http://localhost:5180`; the broker side at `localhost:5036` |
 | Data folder | `~/rewind/` (history, sessions, config, certificate) — outside the repo, separate from `~/tradebot/` |
-| Price history | Dukascopy (Swiss bank/broker) free data feed: 24 months, six symbols, bid and ask; downloaded by Rewind's own tool (§4) |
+| Price history | Dukascopy (Swiss bank/broker) free data feed: 24 months, bid and ask; six symbols, plus Scout's other twelve and SOLUSD from v0.11 (19 in all); downloaded by Rewind's own tool (§4) |
 
 ---
 
@@ -71,7 +71,7 @@ Rewind's own downloader, **`rewind-download`** (a small C# console program in th
 | Source | Dukascopy data feed, one compressed file per symbol, side and day: `https://datafeed.dukascopy.com/datafeed/<SYMBOL>/<yyyy>/<MM-1>/<dd>/<BID\|ASK>_candles_min_1.bi5` — month counted from 00 (confirmed: `2026/09/12` is Monday 12-Oct-2026). HTTPS only (plain HTTP is redirected to it) |
 | Why M1 files | The feed offers 1-minute, 1-hour and 1-day candle files, not 5-minute ones; M5 and larger are built from M1. Keeping the M1 files costs nothing extra and allows a more exact replay later (§6.3) |
 | Format of a file | LZMA-compressed (the 7-Zip method, "lzma alone": 5 property bytes, 8 bytes size, data); inside, 1,440 records of 24 bytes, big-endian: seconds since 00:00 UTC, **open, close, low, high** (whole numbers = price × factor), volume (float). Decoded with the SharpCompress library (MIT licence, NuGet). Price factors: 100,000 (EURUSD, EURGBP), 1,000 (AUDJPY, GBPJPY), 10 (BTCUSD, ETHUSD) — checked against IC Markets' H1 candles of 14-Oct-2026: all six within 0.06 % |
-| Symbols | AUDJPY, EURGBP, EURUSD, GBPJPY, BTCUSD, ETHUSD (Dukascopy uses the same names). Forex Saturdays are not downloaded (market closed) |
+| Symbols | AUDJPY, EURGBP, EURUSD, GBPJPY, BTCUSD, ETHUSD (Dukascopy uses the same names). **v0.11, for Scout Lens (§7.1):** Scout's other symbols GBPUSD, USDJPY, EURJPY, XAUUSD, XAGUSD, XPTUSD, US500, USTEC, DE40, XTIUSD, XBRUSD, XNGUSD, SOLUSD; Dukascopy's names where they differ: XPTCMDUSD, USA500IDXUSD, USATECHIDXUSD, DEUIDXEUR, LIGHTCMDUSD, BRENTCMDUSD, GASCMDUSD (`src/Rewind.Download/Instruments.cs`). Price factor 1,000 for all but GBPUSD (100,000); checked against the brokers' prices of 6-Nov-2026 for EURJPY, XAUUSD, XAGUSD, XPTUSD, US500, DE40, XTIUSD — the others to be checked in the summary of the first full download (a wrong factor only needs `--build-only`, no new download). Saturdays are not downloaded except for crypto |
 | Period | 24 months back from the last complete day (first run: 1-Oct-2024 → 19-Oct-2026); re-running adds the missing days |
 | Amount | 8,120 files of about 11–15 KB (≈ 100 MB) for 1-Oct-2024 → 19-Oct-2026 |
 | Politeness | **One download at a time**, at least 1 s apart (about 2.3 s per file in practice → about 5 hours for the full history). Dukascopy answers "429 Too Many Requests" to bursts (seen while testing); then the downloader waits (the server's Retry-After, else 1 min, doubling up to 15 min, 8 tries). Every file is kept in a raw cache (`~/rewind/history/raw/`), so a re-run never fetches a file twice and resumes after an interruption |
@@ -154,6 +154,25 @@ A 5-minute candle only gives open, high, low, close. Rewind walks each M5 bar th
 | Commission | IC Markets' own figures (read from the demo, 21-Oct-2026): forex **30 USD per million USD traded, on opening and on closing** (≈ 3.30 USD per lot per side on EURUSD); BTCUSD and ETHUSD **none** (spread only) |
 | P/L in USD | Converted with the replay's own prices, no extra downloads: GBPUSD = EURUSD ÷ EURGBP, USDJPY = GBPJPY ÷ GBPUSD (mid prices). A fixed rate from `rewind.json` only if one of those symbols has no history |
 | Not simulated | Swap, margin call / stop-out, requotes |
+
+### 7.1 rewind-lab: Scout's orders played out (v0.11, owner 08-Nov-2026)
+
+For Scout Lens in the Trader project (Trader `docs/bots/scout/scout-lens.md` §8 step 1): every setup Scout would have traded on the history, with its result in R. Rewind supplies the candles and the broker; Scout's own detector (in Trader) decides the orders. The two projects only exchange CSV files — no code is shared (CLAUDE.md).
+
+```
+rewind-lab candles  ──►  <SYMBOL>-H1/H4/D1.csv  ──►  Trader.Scout --replay … --orders  ──►  orders.csv  ──►  rewind-lab outcomes  ──►  outcomes.csv
+ (~/rewind/lab/candles/)                              (Trader; ~/tradebot/lens/orders/)                       (~/rewind/lab/outcomes.csv)
+```
+
+| Item | Rule |
+|---|---|
+| Program | `rewind-lab` (console, `src/Rewind.Lab`), built into `~/rewind/bin/lab/`; uses the history store and the simulated broker of `src/Rewind`, no browser, no network. Trader's `scripts/lens-replay.sh` runs the three steps |
+| `candles` | 1H, 4H and daily candles (bid) built from the 5-minute history exactly as the chart builds them (§5; H4 / D1 from 17:00 New York), written in Trader's candle-file format `time_utc,open,high,low,close`. The last candle of each timeframe is left out (it may not have closed) |
+| `outcomes` | Reads the orders files Scout writes (`place` / `cancel` rows, keyed by setup role `SYMBOL\|TF\|pause start\|M/R`) and plays them in time order on one simulated broker per symbol: a **Buy Stop / Sell Stop** at the level, the smallest volume, **stop-loss at the far side with trailing on** (§7); refused where the broker refuses (price already past the level → `TRADING_BAD_STOPS`, market closed) and not retried; **one cancels the other** within the price step of the fill, and an order whose sibling already filled is not placed (`skipped`); cancelled when Scout cancels it (setup ended) or at its **expiry** (16 candles; the replay stops at each expiry, so an order expired over a weekend never fills on Monday's gap); an order without a valid stop-loss is not played (`no_stop_loss`). After the last order the history plays on until every position has closed. Prices inside a 5-minute candle follow the 4 steps of §6.3 |
+| Result in R | `r` = side × (exit − entry) ÷ \|entry − initial stop-loss\|, from the actual fill (slippage and spread included); `best_r` / `worst_r` = furthest in favour / against while open (at the closing side's price); `exit_reason` StopLoss, trailing stop or history ended. **TM is not simulated** (no mirror, hedges or break-even): the R of Scout's own order |
+| Output | `outcomes.csv`: the place rows of the orders files with `result, result_detail, fill_utc, entry, initial_stop_loss, exit_utc, exit, exit_reason, r, best_r, worst_r, hours_held` added; a summary per symbol on the console. Results: `filled`, `cancelled`, `expired`, `refused`, `skipped`, `no_stop_loss`, `pending_at_end`, `open_at_end` |
+| Symbol details | The twelve new symbols' details in `config/symbols.json` are usual CFD values (digits from Pepperstone's prices), **not read from a broker**, commission 0 — enough for R; to be checked before trading them by hand with TM. Prices in euros (DE40) are converted with EURUSD (fallback rate in `rewind.json`) |
+| Code / tests | `src/Rewind.Lab`; `tests/Rewind.Tests/LabTests.cs` (9 tests: −1R stop-out, trailing locks in profit, one cancels the other, expiry before a gap, fill after a gap with slippage, Scout's cancel and a refusal kept with their reason, no stop-loss, the orders file read and written back, the hour candles of the export) |
 
 ## 8. Sessions
 
@@ -250,6 +269,7 @@ Each step on the owner's go, each tested before the next.
 | 4 | Open API server + certificate; Trader-side T1–T3 (in the Trader repo) | **Built 21-Oct-2026** — 5 end-to-end tests over TLS (wrong secret refused; market order accepted + filled under its ID with the relative stop-loss and real-time opening; refusal as order error; stop order filled for every client while the replay moves, spots at each step; past candles moved into real time). Live: `Trader.ListAccounts` listed account 9000001; **TM unchanged** took over a manual EURUSD sell (mirror, both hedges at the stop-loss, stop-losses removed), then on replayed prices: hedges filled at H, hedge stops at ½R, stops hit, re-hedge, 2R warning; after Close all its state was empty |
 | 5 | Exact mode (§6.2), TM results `tm-trades.csv` (§8), polishing | **Built 22-Oct-2026** — 9 tests (waits only after the steps of a symbol in a trade, a pending order counts, no wait when flat / without TM / in Fast mode / on skips, waits for TM's quiet but at most 5 s, the page and TM's orders are not held up by a paced step, pause ends the candle; legs: hedge cycle + owner close + TM close, break-even then stop at entry, hedges moved before a fill change 1R, partial closes averaged, a restart keeps open legs, untouched positions get no row). Live: TM unchanged on **17–21 Mar 2025** (session `step5-week`): 11 trades on EURUSD, GBPJPY and BTCUSD, 45 minutes for the week; TM sent 150 orders, all accepted; **all 22 legs of `tm-trades.csv` match TM's own logs** — hedge cycles (0–5 per leg), break-even, 2R warnings and one 3R close by TM. Polishing: the downloader builds into its own folder (a rebuild had stopped the first run while it built the CSVs); Rewind warns when TM's `tm.json` misses symbols that have history |
 | 6 | Pending orders by hand (buy/sell limit and stop) with stop-loss / take-profit, trailing stops; in the browser and over the Open API (§5, §7, §10). Trader side: TM v1.4 (owner, 22-Oct-2026) | **Built 22-Oct-2026** — 8 tests (limits fill at their price or better after a gap; sell-stop; each order type refused on the wrong side; an order's SL / TP go to its position and are kept when it moves; trailing follows only in the trade's favour and stops out; switched on later and off again on a short; a limit order with protection over the Open API, accepted, in the reconcile and filled as LIMIT; trailing set and cleared over the Open API). Live with TM (session `pending-orders`, 18-Mar-2025, EURUSD): a manual sell-limit with SL (trailing) and TP, and a buy-stop left alone by TM while pending; the limit's fill taken over (mirror, hedges at its SL, TP copied); at 1R trailing break-even stops on both legs, which trailed and closed the mirror at +0.37R and the main at +2.61R; a wrong-side buy-limit refused with `TRADING_BAD_PRICES` |
+| 7 | `rewind-lab` for Scout Lens (§7.1): candle export for Trader's Scout replay and Scout's orders played out in R; the twelve other Scout symbols and SOLUSD in the downloader (§4) | **Built 08-Nov-2026** — 9 lab tests, 2 clock-change tests (below). First run on the six symbols on disk (Oct 2024 → Oct 2026): 11,460 orders → 6,076 trades, −0.20R per trade, 29 % won (Scout's order alone, trailing from the fill), in 3 s. The run found a chart bug: in the hour New York's clock repeats (DST ends), a 4H candle's start came out after its own bars and the 24/7 crypto charts repeated that candle; fixed in `Timeframes.CandleStart`. Download of the new symbols started 08-Nov-2026 (17,532 files) |
 
 ## 12. Technology
 
@@ -267,6 +287,7 @@ Each step on the owner's go, each tested before the next.
 ## 13. Open questions
 
 - **Spreads:** Dukascopy's own spreads, or fixed per-symbol spreads from the Audit Bot's measurements (closer to the owner's brokers)?
+- **The twelve symbols added for Scout Lens (v0.11):** check the price factors of USTEC, XBRUSD, XNGUSD, SOLUSD, GBPUSD, USDJPY in the first full download's summary, and read their real details (lot size, volumes, commission) from a broker before trading them by hand with TM (§7.1).
 - **Dukascopy's terms of use** for the data feed: not found online; third parties speak of personal use. Rewind keeps the data private (never in Git); ask Dukascopy if it is ever to be shared.
 - **News pop-ups in replay:** TM's news / Friday pop-ups follow the real clock. Rewind could show its own news markers on the chart from Trader's `news-releases.json` (copied) instead.
 - **TM's files in ~/tradebot:** TM writes its replay state and logs under Trader's folders (`run/tm/rewind-9000001.json`, `logs/rewind/`), apart from the demo accounts. Accepted for now.
@@ -294,3 +315,4 @@ Each step on the owner's go, each tested before the next.
 | v0.8 | 22 Oct 2026 | TM's results (§8): a mirror labelled with the owner's order ID (`O<orderId>-MIR`, TM v1.5 mirror orders) is the MIR leg of the trade that order's position starts. Tested live: TM mirrored a manual sell-stop and buy-limit with orders of the same type and price, followed a move and a cancel, and both sell-stops filled as one trade with both legs in `tm-trades.csv` (session `mirror-orders`) |
 | v0.9 | 23 Oct 2026 | Windows (owner: the laptop also boots Windows): TM's secrets name Rewind's certificate authority (`CTRADER_CA_FILE`, T3), so TM trusts Rewind without `SSL_CERT_FILE` (Trader open-code-pieces v1.5); Rewind adds the line to an existing `secrets.env` and also writes `run-tm.ps1`. Not yet run on Windows itself |
 | v0.10 | 29 Oct 2026 | Repository made public (owner); no secrets in its history |
+| v0.11 | 08 Nov 2026 | Step 7 (owner, for Trader's Scout Lens): `rewind-lab` (§7.1) — `candles` exports 1H / 4H / daily candles for Scout's replay, `outcomes` plays Scout's orders on the simulated broker with Scout's rules (stop entry, stop-loss at the far side, trailing, one cancels the other, expiry, refusals) and gives each its result in R. Downloader: Scout's other symbols (§4; Dukascopy names where they differ, `FeedName`); approximate symbol details for them, EUR → USD for DE40 (§7). Fix: 4H candles of 24/7 symbols in the hour New York's clock repeats (§5) |
