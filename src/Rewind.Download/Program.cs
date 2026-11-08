@@ -1,6 +1,7 @@
 // rewind-download (spec §4): downloads Dukascopy's free 1-minute bid and ask candles for Rewind's symbols into a raw
 // cache, then writes one CSV pair per symbol and month: <yyyy-MM>.m1.csv.gz (1-minute) and <yyyy-MM>.m5.csv.
-// Polite: one request at a time; files already in the cache are never fetched again, so a re-run resumes.
+// Polite: one request at a time; a file the server does not give now goes to the end of the queue (8 tries); files
+// already in the cache are never fetched again, so a re-run resumes.
 //
 //   rewind-download                         24 months up to yesterday (UTC), all symbols
 //   rewind-download --from 2026-09-01 --to 2026-09-30 --symbols EURUSD,BTCUSD
@@ -87,25 +88,20 @@ if (!buildOnly)
     Log($"{todo.Count} file(s) to download, one every {interval.TotalSeconds:0.#} s or slower (about {todo.Count * interval.TotalMinutes / 60:0.#} h at best)");
 
     var clock = Stopwatch.StartNew();
-    var failed = 0;
-    for (var n = 0; n < todo.Count && !stop.IsCancellationRequested; n++)
-    {
-        var (i, d, s) = todo[n];
-        try
+    var failed = await DownloadQueue.RunAsync(todo,
+        (f, ct) => feed.TryOnceAsync(f.i, f.d, f.s, ct),
+        Task.Delay,
+        f => $"{f.i.Name} {f.d:yyyy-MM-dd} {f.s}",
+        Log,
+        (n, f, retrying) =>
         {
-            if (!await feed.FetchAsync(i, d, s, stop.Token))
-                failed++;
-        }
-        catch (OperationCanceledException) when (stop.IsCancellationRequested)
-        {
-            break;
-        }
-        if ((n + 1) % 100 == 0 || n + 1 == todo.Count)
-        {
-            var left = TimeSpan.FromSeconds(clock.Elapsed.TotalSeconds / (n + 1) * (todo.Count - n - 1));
-            Log($"{n + 1}/{todo.Count} ({i.Name} {d:yyyy-MM-dd}), {feed.Bytes / 1e6:0.0} MB, about {left.TotalHours:0.0} h left");
-        }
-    }
+            if (n % 100 != 0 && n != todo.Count)
+                return;
+            var left = TimeSpan.FromSeconds(clock.Elapsed.TotalSeconds / n * (todo.Count - n));
+            Log($"{n}/{todo.Count} ({f.i.Name} {f.d:yyyy-MM-dd}), {feed.Bytes / 1e6:0.0} MB, about {left.TotalHours:0.0} h left"
+                + (retrying > 0 ? $"; {retrying} at the end of the queue for another try" : ""));
+        },
+        stop.Token);
     Log($"Downloaded {feed.Fetched} file(s), {feed.Bytes / 1e6:0.0} MB in {clock.Elapsed.TotalMinutes:0} min; {failed} not fetched now");
     if (stop.IsCancellationRequested)
         return 0;
