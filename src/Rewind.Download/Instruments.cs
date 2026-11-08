@@ -36,8 +36,8 @@ internal sealed record Instrument(string Name, int Factor, bool Forex, string? F
         new("DE40", 1_000, Forex: true, "DEUIDXEUR"),
         new("XTIUSD", 1_000, Forex: true, "LIGHTCMDUSD"),
         new("XBRUSD", 1_000, Forex: true, "BRENTCMDUSD"),
-        new("XNGUSD", 1_000, Forex: true, "GASCMDUSD"),
-        new("SOLUSD", 1_000, Forex: false),
+        new("XNGUSD", 10_000, Forex: true, "GASCMDUSD"),
+        new("SOLUSD", 100, Forex: false),
     ];
 
     public static Instrument Find(string name) =>

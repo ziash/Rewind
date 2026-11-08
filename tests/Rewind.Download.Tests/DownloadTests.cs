@@ -86,5 +86,7 @@ public sealed class DownloadTests
         Assert.Equal("2025-01-02 03:04:00,83073.9,83134.0,83073.9,83109.6,83080.0,83140.0,83080.0,83115.0,0.000142",
             Candles.Line(c, Instrument.Find("BTCUSD")));
         Assert.Equal(3, Instrument.Find("GBPJPY").Digits);
+        Assert.Equal(4, Instrument.Find("XNGUSD").Digits); // 28150 in the file is 2.815; checked 08-Nov-2026 (spec §13)
+        Assert.Equal(2, Instrument.Find("SOLUSD").Digits); // 8912 is 89.12
     }
 }

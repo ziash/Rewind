@@ -5,7 +5,7 @@
 | Item | Value |
 |---|---|
 | Status | **Steps 1–7 built** (history downloader 20-Oct-2026; chart, simulated broker and TM connection 21-Oct-2026; exact mode, TM's results, pending orders and trailing stops 22-Oct-2026; `rewind-lab` for Scout Lens 08-Nov-2026) — §11 |
-| Document version | v0.12 (08-Nov-2026) — history in §15 |
+| Document version | v0.13 (08-Nov-2026) — history in §15 |
 | Owner | Zeeshan |
 | Repository | [github.com/ziash/Rewind](https://github.com/ziash/Rewind) (public) — separate from [Trader](https://github.com/ziash/Trader) |
 | Runs on | The Ubuntu laptop, or Windows on the same machine (v0.9); browser GUI at `http://localhost:5180`; the broker side at `localhost:5036` |
@@ -287,7 +287,7 @@ Each step on the owner's go, each tested before the next.
 ## 13. Open questions
 
 - **Spreads:** Dukascopy's own spreads, or fixed per-symbol spreads from the Audit Bot's measurements (closer to the owner's brokers)?
-- **The twelve symbols added for Scout Lens (v0.11):** check the price factors of USTEC, XBRUSD, XNGUSD, SOLUSD, GBPUSD, USDJPY in the first full download's summary, and read their real details (lot size, volumes, commission) from a broker before trading them by hand with TM (§7.1).
+- **The thirteen symbols added for Scout Lens (v0.11):** price factors checked against the first full download (v0.13): XNGUSD is 10,000 and SOLUSD 100, the others as set. Still to do: read their real details (lot size, volumes, commission) from a broker before trading them by hand with TM (§7.1). **Dukascopy has no SOLUSD after 22-Aug-2026** (its files answer "not found"); Brent (XBRUSD) has no Sunday session, so about 5 trading days a week.
 - **Dukascopy's terms of use** for the data feed: not found online; third parties speak of personal use. Rewind keeps the data private (never in Git); ask Dukascopy if it is ever to be shared.
 - **News pop-ups in replay:** TM's news / Friday pop-ups follow the real clock. Rewind could show its own news markers on the chart from Trader's `news-releases.json` (copied) instead.
 - **TM's files in ~/tradebot:** TM writes its replay state and logs under Trader's folders (`run/tm/rewind-9000001.json`, `logs/rewind/`), apart from the demo accounts. Accepted for now.
@@ -317,3 +317,4 @@ Each step on the owner's go, each tested before the next.
 | v0.10 | 29 Oct 2026 | Repository made public (owner); no secrets in its history |
 | v0.11 | 08 Nov 2026 | Step 7 (owner, for Trader's Scout Lens): `rewind-lab` (§7.1) — `candles` exports 1H / 4H / daily candles for Scout's replay, `outcomes` plays Scout's orders on the simulated broker with Scout's rules (stop entry, stop-loss at the far side, trailing, one cancels the other, expiry, refusals) and gives each its result in R. Downloader: Scout's other symbols (§4; Dukascopy names where they differ, `FeedName`); approximate symbol details for them, EUR → USD for DE40 (§7). Fix: 4H candles of 24/7 symbols in the hour New York's clock repeats (§5) |
 | v0.12 | 08 Nov 2026 | Downloader (owner): a file Dukascopy does not give now goes to the end of the queue instead of holding up the download for up to an hour; polite waits only when failures come in a row (§4) |
+| v0.13 | 08 Nov 2026 | First full download of the 19 symbols: price factors of XNGUSD (10,000) and SOLUSD (100) corrected; SOLUSD ends 22-Aug-2026 in Dukascopy's feed (§13) |
