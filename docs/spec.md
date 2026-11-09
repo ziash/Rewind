@@ -4,8 +4,8 @@
 
 | Item | Value |
 |---|---|
-| Status | **Steps 1–7 built** (history downloader 20-Oct-2026; chart, simulated broker and TM connection 21-Oct-2026; exact mode, TM's results, pending orders and trailing stops 22-Oct-2026; `rewind-lab` for Scout Lens 08-Nov-2026) — §11 |
-| Document version | v0.14 (09-Nov-2026) — history in §15 |
+| Status | **Steps 1–8 built** (history downloader 20-Oct-2026; chart, simulated broker and TM connection 21-Oct-2026; exact mode, TM's results, pending orders and trailing stops 22-Oct-2026; `rewind-lab` for Scout Lens 08-Nov-2026; whole-account run 09-Nov-2026) — §11 |
+| Document version | v0.15 (09-Nov-2026) — history in §15 |
 | Owner | Zeeshan |
 | Repository | [github.com/ziash/Rewind](https://github.com/ziash/Rewind) (public) — separate from [Trader](https://github.com/ziash/Trader) |
 | Runs on | The Ubuntu laptop, or Windows on the same machine (v0.9); browser GUI at `http://localhost:5180`; the broker side at `localhost:5036` |
@@ -189,7 +189,7 @@ A 5-minute candle only gives open, high, low, close. Rewind walks each M5 bar th
 | Inside a candle | Fills and hits are checked at each of the 4 price steps (§6.3) in order, so a stop-loss visited before the take-profit wins |
 | Commission | IC Markets' own figures (read from the demo, 21-Oct-2026): forex **30 USD per million USD traded, on opening and on closing** (≈ 3.30 USD per lot per side on EURUSD); BTCUSD and ETHUSD **none** (spread only) |
 | P/L in USD | Converted with the replay's own prices, no extra downloads: GBPUSD = EURUSD ÷ EURGBP, USDJPY = GBPJPY ÷ GBPUSD (mid prices). A fixed rate from `rewind.json` only if one of those symbols has no history |
-| Not simulated | Swap, margin call / stop-out, requotes |
+| Not simulated | Swap, margin call / stop-out (only in the whole-account run, §7.2), requotes |
 
 ### 7.1 rewind-lab: Scout's orders played out (v0.11, owner 08-Nov-2026)
 
@@ -209,6 +209,24 @@ rewind-lab candles  ──►  <SYMBOL>-H1/H4/D1.csv  ──►  Trader.Scout --
 | Output | `outcomes.csv`: the place rows of the orders files with `result, result_detail, fill_utc, entry, initial_stop_loss, exit_utc, exit, exit_reason, r, best_r, worst_r, hours_held` added; a summary per symbol on the console. Results: `filled`, `cancelled`, `expired`, `refused`, `skipped`, `no_stop_loss`, `pending_at_end`, `open_at_end` |
 | Symbol details | The twelve new symbols' details in `config/symbols.json` are usual CFD values (digits from Pepperstone's prices), **not read from a broker**, commission 0 — enough for R; to be checked before trading them by hand with TM. Prices in euros (DE40) are converted with EURUSD (fallback rate in `rewind.json`) |
 | Code / tests | `src/Rewind.Lab`; `tests/Rewind.Tests/LabTests.cs` (9 tests: −1R stop-out, trailing locks in profit, one cancels the other, expiry before a gap, fill after a gap with slippage, Scout's cancel and a refusal kept with their reason, no stop-loss, the orders file read and written back, the hour candles of the export) |
+
+### 7.2 Whole-account run (step 8)
+
+For Trader's Phase 3 (independent review P-06; owner, 09-Nov-2026: use Rewind and a switch in the bots, no separate simulator). The real Scout and the real TM trade one simulated account over all symbols, as fast as they can answer. `rewind-lab run` starts it; nothing here changes the browser replay, which keeps its real-time behaviour of §6.
+
+| Part | How |
+|---|---|
+| One account, one clock | All symbols on one broker. Every 5-minute slice is walked together: the four price steps of all symbols at that moment, then the bots' turn |
+| **Lock-step** (replaces §6.2's wait) | After each price step Rewind gives each bot a turn, one bot at a time in the order they connected (Scout, then TM, so a run repeats exactly), and waits until it says it has finished. Scout acts only at the end of a 5-minute candle. A bot that does not answer within 2 minutes ends the run |
+| Turn messages | Turn: an unsolicited `ProtoOAVersionRes` whose version is `turn <ticks>`. Finished (and, the first time, "I take part"): `ProtoOASymbolCategoryListReq`. Neither is otherwise used by the bots |
+| Time | In a run everything is sent in replay time, with no shift (§6.1 does not apply) |
+| Margin | Per position, fixed at opening: traded value ÷ the symbol's `leverage`. A symbol's buys and sells combine by the broker's rule (`marginMode` SUM, MAX or NET; Pepperstone: MAX) |
+| Refusals | An order or a stop reaching its price is refused with `NOT_ENOUGH_MONEY` when free margin would go negative. A pending order refused at its price is rejected and leaves the account (a hedge can fail this way, review F-08) |
+| Stop-out | At each price step, while equity ÷ margin is at or below `stopOutLevel` (Pepperstone 50 %), the worst position closes |
+| Swap | At 17:00 New York, per position, on days its market is open: `swapLong` / `swapShort` in pips or % a year, three times on the `swapTripleDay`. Booked at once; shown in the closing trade's result |
+| Expiry | A pending order's server expiry is honoured |
+| What it writes | `--out`: `events.csv`, `trades.csv`, `tm-trades.csv` (§8) and `equity.csv` (balance, equity, margin, positions and orders, hourly) |
+| Symbol details | `symbols.json` in the run's config folder may carry each symbol's `leverage`, `swapLong`, `swapShort`, `swapPercent`, `swapTripleDay` (Trader: `Scout --export-symbols`, read from Pepperstone) |
 
 ## 8. Sessions
 
@@ -306,6 +324,7 @@ Each step on the owner's go, each tested before the next.
 | 5 | Exact mode (§6.2), TM results `tm-trades.csv` (§8), polishing | **Built 22-Oct-2026** — 9 tests (waits only after the steps of a symbol in a trade, a pending order counts, no wait when flat / without TM / in Fast mode / on skips, waits for TM's quiet but at most 5 s, the page and TM's orders are not held up by a paced step, pause ends the candle; legs: hedge cycle + owner close + TM close, break-even then stop at entry, hedges moved before a fill change 1R, partial closes averaged, a restart keeps open legs, untouched positions get no row). Live: TM unchanged on **17–21 Mar 2025** (session `step5-week`): 11 trades on EURUSD, GBPJPY and BTCUSD, 45 minutes for the week; TM sent 150 orders, all accepted; **all 22 legs of `tm-trades.csv` match TM's own logs** — hedge cycles (0–5 per leg), break-even, 2R warnings and one 3R close by TM. Polishing: the downloader builds into its own folder (a rebuild had stopped the first run while it built the CSVs); Rewind warns when TM's `tm.json` misses symbols that have history |
 | 6 | Pending orders by hand (buy/sell limit and stop) with stop-loss / take-profit, trailing stops; in the browser and over the Open API (§5, §7, §10). Trader side: TM v1.4 (owner, 22-Oct-2026) | **Built 22-Oct-2026** — 8 tests (limits fill at their price or better after a gap; sell-stop; each order type refused on the wrong side; an order's SL / TP go to its position and are kept when it moves; trailing follows only in the trade's favour and stops out; switched on later and off again on a short; a limit order with protection over the Open API, accepted, in the reconcile and filled as LIMIT; trailing set and cleared over the Open API). Live with TM (session `pending-orders`, 18-Mar-2025, EURUSD): a manual sell-limit with SL (trailing) and TP, and a buy-stop left alone by TM while pending; the limit's fill taken over (mirror, hedges at its SL, TP copied); at 1R trailing break-even stops on both legs, which trailed and closed the mirror at +0.37R and the main at +2.61R; a wrong-side buy-limit refused with `TRADING_BAD_PRICES` |
 | 7 | `rewind-lab` for Scout Lens (§7.1): candle export for Trader's Scout replay and Scout's orders played out in R; the twelve other Scout symbols and SOLUSD in the downloader (§4) | **Built 08-Nov-2026** — 9 lab tests, 2 clock-change tests (below). First run on the six symbols on disk (Oct 2024 → Oct 2026): 11,460 orders → 6,076 trades, −0.20R per trade, 29 % won (Scout's order alone, trailing from the fill), in 3 s. The run found a chart bug: in the hour New York's clock repeats (DST ends), a 4H candle's start came out after its own bars and the 24/7 crypto charts repeated that candle; fixed in `Timeframes.CandleStart`. Download of the new symbols started 08-Nov-2026 (17,532 files) |
+| 8 | Whole-account run (§7.2) for Trader's Phase 3: one account over all symbols, lock-step with the real bots, margin, refusals, stop-out, swap, expiry | **Built 09-Nov-2026** — see §15 v0.15 |
 
 ## 12. Technology
 
@@ -355,3 +374,4 @@ Each step on the owner's go, each tested before the next.
 | v0.12 | 08 Nov 2026 | Downloader (owner): a file Dukascopy does not give now goes to the end of the queue instead of holding up the download for up to an hour; polite waits only when failures come in a row (§4) |
 | v0.13 | 08 Nov 2026 | First full download of the 19 symbols: price factors of XNGUSD (10,000) and SOLUSD (100) corrected; SOLUSD ends 22-Aug-2026 in Dukascopy's feed (§13) |
 | v0.14 | 09 Nov 2026 | New §4.1 (owner): what was downloaded, for what, and the state of each symbol's files |
+| v0.15 | 09 Nov 2026 | Step 8 (owner, Trader's Phase 3): whole-account run (§7.2): one account over all symbols, lock-step turns with the real Scout and TM, margin by the broker's rule, refusals, stop-out, swap, order expiry |

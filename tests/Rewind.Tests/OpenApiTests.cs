@@ -48,6 +48,33 @@ public sealed class OpenApiTests : IAsyncDisposable
         return (client, clock, broker);
     }
 
+    /// <summary>spec §7.2: each bot in turn gets the turn message, and the run waits until it has finished.</summary>
+    [Fact]
+    public async Task In_lock_step_a_turn_waits_for_the_bot()
+    {
+        var bars = Enumerable.Range(-5, 5).Select(i => B(i, 1.1, 1.1, 1.1, 1.1)).ToArray();
+        var history = new Dictionary<string, SymbolHistory> { ["EURUSD"] = new(new SymbolInfo("EURUSD", 5), bars) };
+        var specs = new Dictionary<string, SymbolSpec> { ["EURUSD"] = new("EURUSD", "EUR", "USD", 5, 4, 10_000_000, 100_000, 100_000, 10_000_000_000, 30) };
+        var broker = new SimBroker(history, specs, new RewindConfig()) { Rules = new AccountRules() };
+        broker.Open(null, T0);
+        var server = new OpenApiServer(FreePortOf(out var port), Certificates.Ensure(Path.Combine(_dir, "certs"), _ => { }), new Credentials("c", "s"), broker,
+            new ReplayClock(history, null, broker, lookback: TimeSpan.Zero), history, _ => { }, lockStep: true);
+        _ = server.RunAsync(_stop.Token);
+        var client = await Client.ConnectAsync(port);
+        await client.AskAsync(new ProtoOAApplicationAuthReq { ClientId = "c", ClientSecret = "s" });
+        await client.AskAsync(new ProtoOAAccountAuthReq { CtidTraderAccountId = Credentials.AccountId, AccessToken = Credentials.NewToken() });
+        var join = new ProtoOASymbolCategoryListReq { CtidTraderAccountId = Credentials.AccountId };
+        Assert.IsType<ProtoOASymbolCategoryListRes>(await client.AskAsync(join));
+        Assert.Equal(1, server.Steppers);
+
+        var turn = Task.Run(() => server.Turn(T0));
+        var marker = Assert.IsType<ProtoOAVersionRes>(Assert.Single(await client.CollectAsync(TimeSpan.FromMilliseconds(300))));
+        Assert.Equal($"turn {T0.Ticks}", marker.Version);
+        Assert.False(turn.IsCompleted);
+        await client.AskAsync(join);
+        await turn.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
     [Fact]
     public async Task Refuses_a_wrong_client_secret()
     {
@@ -192,6 +219,8 @@ public sealed class OpenApiTests : IAsyncDisposable
     }
 
     /// <summary>A minimal Open API client: TLS (trusting Rewind's certificate), framing, replies by clientMsgId.</summary>
+    private static int FreePortOf(out int port) => port = FreePort();
+
     private sealed class Client(SslStream ssl)
     {
         private int _next;

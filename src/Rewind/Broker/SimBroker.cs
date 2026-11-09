@@ -52,16 +52,26 @@ public sealed class SimBroker : IMarket
 
     public IReadOnlyDictionary<string, SymbolSpec> Specs => _specs;
 
+    /// <summary>Margin, refusals, stop-out, swap and order expiry (the whole-account run, spec §7.2); null in the browser replay.</summary>
+    public AccountRules? Rules { get; set; }
+
+    /// <summary>The replay's own time.</summary>
+    public DateTime Now
+    {
+        get { lock (_lock) return _now; }
+    }
+
     // ---- sessions ---------------------------------------------------------------------------------------------
 
     /// <summary>Loads the account of a session folder (or starts one with <paramref name="startBalance"/>) and prices at the cursor.</summary>
-    public void Open(string? dir, DateTime cursorUtc, double? startBalance = null)
+    /// <param name="keepAccountFile">False in a whole-account run: account.json is not rewritten after every change (spec §7.2).</param>
+    public void Open(string? dir, DateTime cursorUtc, double? startBalance = null, bool keepAccountFile = true)
     {
         lock (_lock)
         {
             _journal?.Dispose();
             _tm?.Dispose();
-            _path = dir is null ? null : Path.Combine(dir, "account.json");
+            _path = dir is null || !keepAccountFile ? null : Path.Combine(dir, "account.json");
             _account = _path is not null && File.Exists(_path)
                 ? JsonSerializer.Deserialize<AccountState>(File.ReadAllText(_path)) ?? new AccountState()
                 : new AccountState { Balance = startBalance ?? _config.StartBalance, StartBalance = startBalance ?? _config.StartBalance };
@@ -129,7 +139,166 @@ public sealed class SimBroker : IMarket
         }
     }
 
+    /// <summary>
+    /// The whole-account run (spec §7.2): every 5-minute slice from <paramref name="fromUtc"/> up to <paramref name="toUtc"/>, all symbols together, 4 price steps each.
+    /// <paramref name="afterStep"/> gets the step's time and index (0–3), outside the lock.
+    /// </summary>
+    public void Walk(DateTime fromUtc, DateTime toUtc, Action<DateTime, int> afterStep)
+    {
+        var rules = Rules ?? throw new InvalidOperationException("A whole-account run needs Rules");
+        var cursors = _history.Values.Select(h => (History: h, Next: h.RevealedCount(fromUtc))).ToArray();
+        var nextRollover = ReplayClock.Next(SkipTarget.Day, fromUtc);
+        while (true)
+        {
+            var slice = DateTime.MaxValue;
+            foreach (var (h, n) in cursors)
+                if (n < h.Bars.Length && h.Bars[n].TimeUtc < slice)
+                    slice = h.Bars[n].TimeUtc;
+            if (slice == DateTime.MaxValue || slice + Bar.Length > toUtc)
+                break;
+            var bars = new List<(string Symbol, (double Bid, double Ask)[] Path)>(cursors.Length);
+            for (var c = 0; c < cursors.Length; c++)
+                if (cursors[c].Next < cursors[c].History.Bars.Length && cursors[c].History.Bars[cursors[c].Next].TimeUtc == slice)
+                    bars.Add((cursors[c].History.Symbol.Name, PricePath(cursors[c].History.Bars[cursors[c].Next++])));
+
+            for (var i = 0; i < 4; i++)
+            {
+                var t = slice + TimeSpan.FromTicks(Bar.Length.Ticks * i / 3);
+                lock (_lock)
+                {
+                    _now = t;
+                    foreach (var (symbol, path) in bars)
+                    {
+                        _quotes[symbol] = new Quote(path[i].Bid, path[i].Ask, t, true);
+                        QuoteChanged?.Invoke(symbol, _quotes[symbol]);
+                    }
+                    if (i == 0)
+                        foreach (var s in _quotes.Keys.ToList())
+                            _quotes[s] = _quotes[s] with { Live = t - _quotes[s].TimeUtc <= ClosedAfter };
+                    Expire(t);
+                    foreach (var (symbol, path) in bars)
+                    {
+                        Trigger(symbol, path[i].Bid, path[i].Ask, gap: i == 0);
+                        _tm?.Quote(symbol, path[i].Bid, path[i].Ask);
+                    }
+                    if (t >= nextRollover)
+                    {
+                        ChargeSwap(nextRollover);
+                        nextRollover = ReplayClock.Next(SkipTarget.Day, t);
+                    }
+                    StopOut(rules);
+                }
+                afterStep(t, i);
+            }
+        }
+        lock (_lock)
+            _tm?.Save();
+    }
+
+    /// <summary>Balance, equity (balance + open results), and the margin held.</summary>
+    public (double Balance, double Equity, double Margin, int Positions, int Orders) Money()
+    {
+        lock (_lock)
+            return (_account.Balance, EquityNow(), UsedMargin(), _account.Positions.Count, _account.Orders.Count);
+    }
+
+    /// <summary>Each open position's result at the current price, before and after commission (swap is in the balance already).</summary>
+    public IReadOnlyList<(long Id, double Gross, double Net)> OpenResults()
+    {
+        lock (_lock)
+            return _account.Positions.Select(p =>
+            {
+                var gross = Pnl(p, p.Volume, ExitPrice(p));
+                return (p.Id, gross, gross - p.OpenCommission);
+            }).ToList();
+    }
+
+    /// <summary>The margin a new position of this volume would hold, at the current price.</summary>
+    public double ExpectedMargin(string symbol, int dir, long volume)
+    {
+        lock (_lock)
+        {
+            var q = LiveQuote(symbol, allowClosed: true);
+            return MarginFor(symbol, volume, dir > 0 ? q.Ask : q.Bid);
+        }
+    }
+
+    public double MarginOf(Position p) => p.Margin;
+
+    private double ExitPrice(Position p) => _quotes.TryGetValue(p.Symbol, out var q) ? (p.Dir > 0 ? q.Bid : q.Ask) : p.Entry;
+
+    private double EquityNow() => _account.Balance + _account.Positions.Sum(p => Pnl(p, p.Volume, ExitPrice(p)));
+
+    private double MarginFor(string symbol, long volume, double price)
+    {
+        var spec = _specs[symbol];
+        return spec.Leverage <= 0 ? 0 : volume / 100.0 * price * QuoteToUsd(spec.Quote) / spec.Leverage;
+    }
+
+    private double UsedMargin(string? addSymbol = null, int addDir = 0, double addMargin = 0)
+    {
+        var mode = Rules?.MarginMode ?? "Sum";
+        var total = 0.0;
+        foreach (var symbol in _account.Positions.Select(p => p.Symbol).Append(addSymbol).OfType<string>().Distinct())
+        {
+            var on = _account.Positions.Where(p => p.Symbol == symbol).ToList();
+            var buy = on.Where(p => p.Dir > 0).Sum(p => p.Margin) + (symbol == addSymbol && addDir > 0 ? addMargin : 0);
+            var sell = on.Where(p => p.Dir < 0).Sum(p => p.Margin) + (symbol == addSymbol && addDir < 0 ? addMargin : 0);
+            total += mode switch { "Max" => Math.Max(buy, sell), "Net" => Math.Abs(buy - sell), _ => buy + sell };
+        }
+        return total;
+    }
+
+    /// <summary>Would a new position leave free margin? One that does not add margin (the smaller side, under MAX) always fits.</summary>
+    private bool Fits(string symbol, int dir, long volume, double price)
+    {
+        var before = UsedMargin();
+        var after = UsedMargin(symbol, dir, MarginFor(symbol, volume, price));
+        return after <= before || EquityNow() - after >= 0;
+    }
+
+    private void Expire(DateTime t)
+    {
+        foreach (var o in _account.Orders.Where(o => o.ExpiresUtc is { } x && x <= t).ToList())
+        {
+            _account.Orders.Remove(o);
+            Record(new BrokerEvent(_now, EventKind.OrderExpired, o.Symbol, null, o.Id, o.Dir, o.Volume, o.Price, $"{o.Name} expired", o.Label) { Order = o.Copy() });
+        }
+    }
+
+    private void StopOut(AccountRules rules)
+    {
+        while (_account.Positions.Count > 0 && UsedMargin() is var margin and > 0 && EquityNow() / margin * 100 <= rules.StopOutLevel)
+        {
+            var worst = _account.Positions.MinBy(p => Pnl(p, p.Volume, ExitPrice(p)))!;
+            Close(worst, worst.Volume, ExitPrice(worst), CloseReason.StopOut);
+        }
+    }
+
+    /// <summary>Swap of the positions held through 17:00 New York, on symbols whose market is open then (spec §7.2).</summary>
+    private void ChargeSwap(DateTime rollover)
+    {
+        var day = TimeZoneInfo.ConvertTimeFromUtc(rollover, TimeZoneInfo.FindSystemTimeZoneById("America/New_York")).DayOfWeek;
+        foreach (var p in _account.Positions)
+        {
+            var spec = _specs[p.Symbol];
+            if (!_quotes.TryGetValue(p.Symbol, out var q) || !q.Live)
+                continue;
+            var rate = p.Dir > 0 ? spec.SwapLong : spec.SwapShort;
+            var units = p.Volume / 100.0;
+            var usd = spec.SwapPercent ? units * q.Bid * QuoteToUsd(spec.Quote) * rate / 100 / 360 : units * rate * spec.PipSize * QuoteToUsd(spec.Quote);
+            usd *= (int)day == spec.SwapTripleDay ? 3 : 1;
+            p.Swap += usd;
+            _account.Balance += usd;
+        }
+    }
+
     /// <summary>True while the symbol has an open position or a pending order (exact mode waits for TM only then).</summary>
+    public bool AnyInTrade
+    {
+        get { lock (_lock) return _account.Positions.Count > 0 || _account.Orders.Count > 0; }
+    }
+
     public bool InTrade(string symbol)
     {
         lock (_lock)
@@ -152,6 +321,8 @@ public sealed class SimBroker : IMarket
             CheckVolume(spec, volume);
             var q = LiveQuote(symbol);
             var price = dir > 0 ? q.Ask : q.Bid;
+            if (Rules is not null && !Fits(symbol, dir, volume, price))
+                throw new BrokerException("NOT_ENOUGH_MONEY", $"{symbol}: not enough free margin");
             CheckStops(spec, dir, q, stopLoss, takeProfit);
             CheckTrailing(stopLoss, trailing);
             var p = OpenPosition(symbol, dir, volume, price, label, comment, stopLoss, takeProfit, order: null, trailing);
@@ -169,13 +340,13 @@ public sealed class SimBroker : IMarket
     /// the bid), with an optional stop-loss, take-profit and trailing switch for the position it opens.
     /// </summary>
     public PendingOrder PlaceOrder(OrderType type, string symbol, int dir, long volume, double price, double? stopLoss = null, double? takeProfit = null,
-        bool trailing = false, string label = "", string comment = "")
+        bool trailing = false, string label = "", string comment = "", DateTime? expiresUtc = null)
     {
         lock (_lock)
         {
             var spec = Spec(symbol);
             CheckVolume(spec, volume);
-            var o = new PendingOrder { Id = _account.NextId, Symbol = symbol, Type = type, Dir = dir, Volume = volume, CreatedUtc = _now, Label = label, Comment = comment };
+            var o = new PendingOrder { Id = _account.NextId, Symbol = symbol, Type = type, Dir = dir, Volume = volume, CreatedUtc = _now, ExpiresUtc = expiresUtc, Label = label, Comment = comment };
             SetOrder(o, spec, LiveQuote(symbol), price, stopLoss, takeProfit, trailing, "be");
             _account.NextId++;
             _account.Orders.Add(o);
@@ -372,6 +543,12 @@ public sealed class SimBroker : IMarket
                 continue;
             var price = gap ? market : o.Price;
             _account.Orders.Remove(o);
+            if (Rules is not null && !Fits(symbol, o.Dir, o.Volume, price))
+            {
+                Record(new BrokerEvent(_now, EventKind.OrderRejected, symbol, null, o.Id, o.Dir, o.Volume, price, $"{o.Name} refused at its price: not enough free margin", o.Label) { Order = o.Copy() });
+                changed = true;
+                continue;
+            }
             Record(new BrokerEvent(_now, EventKind.OrderFilled, symbol, null, o.Id, o.Dir, o.Volume, price,
                 $"{o.Name} {Fmt(_specs[symbol], o.Price)} filled at {Fmt(_specs[symbol], price)}", o.Label) { Order = o.Copy() });
             OpenPosition(symbol, o.Dir, o.Volume, price, o.Label, o.Comment, o.StopLoss, o.TakeProfit, o, o.Trailing);
@@ -412,8 +589,9 @@ public sealed class SimBroker : IMarket
         var commission = Commission(symbol, volume, price);
         var p = new Position
         {
-            Id = _account.NextId++, Symbol = symbol, Dir = dir, Volume = volume, Entry = price, OpenUtc = _now, OpenRealUtc = DateTime.UtcNow,
+            Id = _account.NextId++, Symbol = symbol, Dir = dir, Volume = volume, Entry = price, OpenUtc = _now, OpenRealUtc = Rules is null ? DateTime.UtcNow : _now,
             StopLoss = sl, TakeProfit = tp, InitialStopLoss = sl, Label = label, Comment = comment, OpenCommission = commission,
+            Margin = Rules is null ? 0 : MarginFor(symbol, volume, price),
         };
         var q = _quotes[symbol];
         SetTrailing(p, trailing, price - dir * (q.Ask - q.Bid)); // from the price it would close at, at the fill
@@ -433,19 +611,23 @@ public sealed class SimBroker : IMarket
         var openCommission = p.OpenCommission * share;
         var closeCommission = Commission(p.Symbol, volume, price);
         var pnl = Pnl(p, volume, price);
+        var swap = p.Swap * share; // already in the balance: reported with the trade
+        var margin = p.Margin * share;
         _account.Balance += pnl - closeCommission;
         _account.CommissionPaid += closeCommission;
         p.OpenCommission -= openCommission;
+        p.Swap -= swap;
+        p.Margin -= margin;
         p.Volume -= volume;
         var all = p.Volume == 0;
         if (all)
             _account.Positions.Remove(p);
 
-        var what = reason switch { CloseReason.StopLoss => "stop-loss hit", CloseReason.TakeProfit => "take-profit hit", CloseReason.Tm => "closed by TM", _ => "closed" };
+        var what = reason switch { CloseReason.StopLoss => "stop-loss hit", CloseReason.TakeProfit => "take-profit hit", CloseReason.Tm => "closed by TM", CloseReason.StopOut => "stopped out", _ => "closed" };
         Record(new BrokerEvent(_now, all ? EventKind.PositionClosed : EventKind.PositionReduced, p.Symbol, p.Id, null, p.Dir, volume, price,
             $"{what}: {spec.Lots(volume):0.##} at {Fmt(spec, price)}, {pnl - openCommission - closeCommission:+0.00;-0.00} USD", p.Label)
             { Position = p.Copy(), Reason = reason, Commission = closeCommission, GrossProfit = pnl, Balance = _account.Balance });
-        _journal?.Trade(p, spec, volume, price, _now, reason, pnl, openCommission + closeCommission);
+        _journal?.Trade(p, spec, volume, price, _now, reason, pnl + swap, openCommission + closeCommission);
     }
 
     /// <summary>Profit in USD of closing <paramref name="volume"/> at <paramref name="exit"/> (before commission).</summary>

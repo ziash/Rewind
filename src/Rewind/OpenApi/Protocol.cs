@@ -47,10 +47,11 @@ public static class Protocol
     /// the 2022 library lacks some mappings).
     /// </summary>
     public static IMessage? Decode(ProtoMessage envelope) =>
+        envelope.PayloadType == ProtoOAGetPositionUnrealizedPnLReq.Type ? ProtoOAGetPositionUnrealizedPnLReq.From(envelope.Payload) :
         MessageFactory.GetMessage(envelope) ?? (Parsers.Value.TryGetValue(envelope.PayloadType, out var p) ? p.ParseFrom(envelope.Payload) : null);
 
     private static uint PayloadTypeOf(IMessage message) => PayloadTypes.GetOrAdd(message.GetType(), t =>
-        t.GetProperty("PayloadType", BindingFlags.Public | BindingFlags.Instance)?.GetValue(Activator.CreateInstance(t)) is Enum e
+        t.GetProperty("PayloadType", BindingFlags.Public | BindingFlags.Instance)?.GetValue(Activator.CreateInstance(t)) is { } e and (Enum or uint)
             ? Convert.ToUInt32(e)
             : throw new InvalidOperationException($"{t.Name} has no payload type"));
 

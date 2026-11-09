@@ -4,7 +4,8 @@ namespace Rewind.Broker;
 
 /// <summary>Trading details of one symbol (spec §7, config/symbols.json). Volumes in Open API units (hundredths of a unit).</summary>
 public sealed record SymbolSpec(string Name, string Base, string Quote, int Digits, int PipPosition, long LotSize,
-    long MinVolume, long StepVolume, long MaxVolume, double CommissionPerMillionUsd)
+    long MinVolume, long StepVolume, long MaxVolume, double CommissionPerMillionUsd,
+    double Leverage = 0, double SwapLong = 0, double SwapShort = 0, bool SwapPercent = false, int SwapTripleDay = 3)
 {
     public double PipSize => Math.Pow(10, -PipPosition);
     public double Lots(long volume) => (double)volume / LotSize;
@@ -15,6 +16,9 @@ public sealed record SymbolSpec(string Name, string Base, string Quote, int Digi
 /// <summary>config/rewind.json (spec §7).</summary>
 /// <param name="ExactStepSeconds">Exact mode: least time per price step of a symbol in a trade (spec §6.2).</param>
 public sealed record RewindConfig(double StartBalance = 5000, int Leverage = 500, Dictionary<string, double>? FallbackRates = null, double ExactStepSeconds = 1.2);
+
+/// <summary>The whole-account run's broker rules (spec §7.2); none in the browser replay. <paramref name="MarginMode"/>: how a symbol's buys and sells share margin: Sum, Max or Net.</summary>
+public sealed record AccountRules(string MarginMode = "Max", double StopOutLevel = 50);
 
 public static class ConfigFiles
 {

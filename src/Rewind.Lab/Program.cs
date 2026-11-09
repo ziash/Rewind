@@ -5,6 +5,8 @@
 //       1H, 4H and daily candles per symbol in Trader's candle-file format (<SYMBOL>-H1.csv …), for Scout's --replay.
 //   rewind-lab outcomes <orders.csv> [more.csv …] [--out ~/rewind/lab/outcomes.csv]
 //       plays the orders Scout's --replay … --orders wrote on the simulated broker; one row per placed order, with its result in R.
+//   rewind-lab run --from <date> --to <date> --out <folder> [--bots 2] [--port 5037] [--balance 5000] [--margin-mode Max] [--stop-out 50]
+//       the whole-account run (spec §7.2): the real Scout and TM trade one account over all symbols, in lock-step. Listens on localhost only.
 //
 // Options: --history <folder> (default ~/rewind/history), --config <folder> (default ~/rewind/config).
 
@@ -18,6 +20,7 @@ const string Usage = """
 
       rewind-lab candles  [--symbols A,B,…] [--out <folder>]
       rewind-lab outcomes <orders.csv> [more.csv …] [--out <file.csv>]
+      rewind-lab run --from <yyyy-MM-dd> --to <yyyy-MM-dd> --out <folder> [--bots 2] [--port 5037] [--balance 5000] [--margin-mode Max] [--stop-out 50]
 
       --history <folder>   default ~/rewind/history
       --config <folder>    default ~/rewind/config (else the copies next to the program)
@@ -29,6 +32,9 @@ var configDir = Path.Combine(home, "rewind", "config");
 string? outPath = null;
 string[]? symbols = null;
 var files = new List<string>();
+DateTime? from = null, to = null;
+var (bots, port, balance, marginMode, stopOut) = (2, 5037, 5000.0, "Max", 50.0);
+static DateTime Day(string s) => DateTime.SpecifyKind(DateTime.ParseExact(s, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture), DateTimeKind.Utc);
 if (args.Length == 0 || args[0] is "--help" or "-h")
 {
     Console.WriteLine(Usage);
@@ -46,11 +52,22 @@ try
             case "--config": configDir = Value(); break;
             case "--out": outPath = Value(); break;
             case "--symbols": symbols = Value().Split(',', StringSplitOptions.RemoveEmptyEntries); break;
+            case "--from": from = Day(Value()); break;
+            case "--to": to = Day(Value()); break;
+            case "--bots": bots = int.Parse(Value(), System.Globalization.CultureInfo.InvariantCulture); break;
+            case "--port": port = int.Parse(Value(), System.Globalization.CultureInfo.InvariantCulture); break;
+            case "--balance": balance = double.Parse(Value(), System.Globalization.CultureInfo.InvariantCulture); break;
+            case "--margin-mode": marginMode = Value(); break;
+            case "--stop-out": stopOut = double.Parse(Value(), System.Globalization.CultureInfo.InvariantCulture); break;
             case var a when a.StartsWith("--"): throw new ArgumentException($"Unknown option {a}");
             default: files.Add(args[i]); break;
         }
     }
-    if (command is not ("candles" or "outcomes"))
+    if (command == "run" && (from is null || to is null || outPath is null))
+        throw new ArgumentException("run needs --from, --to and --out");
+    if (marginMode is not ("Sum" or "Max" or "Net"))
+        throw new ArgumentException("--margin-mode must be Sum, Max or Net");
+    if (command is not ("candles" or "outcomes" or "run"))
         throw new ArgumentException($"Unknown command {command}");
     if (command == "outcomes" && files.Count == 0)
         throw new ArgumentException("outcomes needs at least one orders file");
@@ -80,6 +97,14 @@ if (command == "candles")
         }
     }
     return 0;
+}
+
+if (command == "run")
+{
+    var runSpecs = ConfigFiles.Symbols(ConfigFiles.Find(configDir, "symbols.json"));
+    var runHistory = HistoryStore.Load(historyDir, Log, symbols);
+    return AccountRun.Execute(runHistory, runSpecs, ConfigFiles.Rewind(ConfigFiles.Find(configDir, "rewind.json")), new AccountRules(marginMode, stopOut),
+        from!.Value, to!.Value, port, bots, outPath!, Path.Combine(home, "rewind", "certs"), balance, Log);
 }
 
 // ---- outcomes ---------------------------------------------------------------------------------------------------

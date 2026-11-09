@@ -43,10 +43,14 @@ public sealed class OpenApiServer
     private readonly Lock _lock = new();
     private readonly List<Connection> _connections = [];
     private long _nextId = 800_000_000;                    // order and deal IDs the broker does not have (market and closing orders, deals)
+    private readonly List<Connection> _steppers = [];      // lock-step: the bots taking turns, in the order they joined (spec §7.2)
+    private readonly bool _lockStep;
 
+    /// <param name="lockStep">The whole-account run (spec §7.2): replay time everywhere, and bots take turns.</param>
     public OpenApiServer(int port, X509Certificate2 certificate, Credentials credentials, SimBroker broker, ReplayClock clock,
-        IReadOnlyDictionary<string, SymbolHistory> history, Action<string> log)
+        IReadOnlyDictionary<string, SymbolHistory> history, Action<string> log, bool lockStep = false)
     {
+        _lockStep = lockStep;
         _port = port;
         _certificate = certificate;
         _credentials = credentials;
@@ -57,6 +61,31 @@ public sealed class OpenApiServer
         _symbols = broker.Specs.Values.Where(s => history.ContainsKey(s.Name)).ToList();
         broker.Event += OnBrokerEvent;
         broker.QuoteChanged += OnQuote;
+    }
+
+    private DateTime Now => _lockStep ? _broker.Now : DateTime.UtcNow;
+
+    private static readonly TimeSpan TurnTimeout = TimeSpan.FromMinutes(2);
+
+    /// <summary>How many bots have joined the lock-step (spec §7.2).</summary>
+    public int Steppers
+    {
+        get { lock (_lock) return _steppers.Count; }
+    }
+
+    /// <summary>Gives each bot its turn at <paramref name="time"/>, one after the other, and waits for each to finish (spec §7.2).</summary>
+    public void Turn(DateTime time)
+    {
+        List<Connection> bots;
+        lock (_lock)
+            bots = _steppers.ToList();
+        var marker = new ProtoOAVersionRes { Version = FormattableString.Invariant($"turn {time.Ticks}") };
+        foreach (var bot in bots)
+        {
+            bot.Send(marker, null);
+            if (!bot.WaitTurn(TurnTimeout))
+                throw new TimeoutException($"A bot did not finish its turn at {time:yyyy-MM-dd HH:mm:ss} within {TurnTimeout.TotalSeconds:0} s");
+        }
     }
 
     public int Connections
@@ -190,6 +219,12 @@ public sealed class OpenApiServer
             case EventKind.OrderCancelled:
                 yield return With(Event(ProtoOAExecutionType.OrderCancelled), order: PendingOrderOf(e.Order!, ProtoOAOrderStatus.OrderStatusCancelled));
                 break;
+            case EventKind.OrderExpired:
+                yield return With(Event(ProtoOAExecutionType.OrderExpired), order: PendingOrderOf(e.Order!, ProtoOAOrderStatus.OrderStatusExpired));
+                break;
+            case EventKind.OrderRejected:
+                yield return With(Event(ProtoOAExecutionType.OrderRejected), order: PendingOrderOf(e.Order!, ProtoOAOrderStatus.OrderStatusRejected));
+                break;
             case EventKind.OrderFilled:
                 break; // the PositionOpened that follows carries the fill
             case EventKind.ProtectionChanged:
@@ -212,7 +247,7 @@ public sealed class OpenApiServer
             case EventKind.PositionClosed or EventKind.PositionReduced:
             {
                 var p = e.Position!;
-                var byStop = e.Reason is CloseReason.StopLoss or CloseReason.TakeProfit;
+                var byStop = e.Reason is CloseReason.StopLoss or CloseReason.TakeProfit or CloseReason.StopOut;
                 var order = Order(NextId(), p.Symbol, -p.Dir, e.Volume, byStop ? ProtoOAOrderType.StopLossTakeProfit : ProtoOAOrderType.Market,
                     ProtoOAOrderStatus.OrderStatusAccepted, p.Label, "", null, positionId: p.Id);
                 order.ClosingOrder = true;
@@ -263,7 +298,7 @@ public sealed class OpenApiServer
         SymbolId = symbolId,
         Bid = Raw(q.Bid),
         Ask = Raw(q.Ask),
-        Timestamp = Ms(DateTime.UtcNow),
+        Timestamp = Ms(Now),
     };
 
     private ProtoOATradeData TradeData(string symbol, int dir, long volume, DateTime openRealUtc, string label, string comment)
@@ -279,13 +314,14 @@ public sealed class OpenApiServer
         var pos = new ProtoOAPosition
         {
             PositionId = p.Id,
-            TradeData = TradeData(p.Symbol, p.Dir, p.Volume, p.OpenRealUtc == default ? DateTime.UtcNow : p.OpenRealUtc, p.Label, p.Comment),
+            TradeData = TradeData(p.Symbol, p.Dir, p.Volume, p.OpenRealUtc == default ? Now : p.OpenRealUtc, p.Label, p.Comment),
             PositionStatus = p.Volume > 0 ? ProtoOAPositionStatus.PositionStatusOpen : ProtoOAPositionStatus.PositionStatusClosed,
             Swap = 0,
             Price = p.Entry,
             Commission = -Money(p.OpenCommission),
             MoneyDigits = MoneyDigits,
-            UtcLastUpdateTimestamp = Ms(DateTime.UtcNow),
+            UsedMargin = (ulong)Money(p.Margin),
+            UtcLastUpdateTimestamp = Ms(Now),
         };
         if (p.StopLoss is { } sl) pos.StopLoss = sl;
         if (p.TakeProfit is { } tp) pos.TakeProfit = tp;
@@ -299,10 +335,10 @@ public sealed class OpenApiServer
         var o = new ProtoOAOrder
         {
             OrderId = id,
-            TradeData = TradeData(symbol, dir, volume, DateTime.UtcNow, label, comment),
+            TradeData = TradeData(symbol, dir, volume, Now, label, comment),
             OrderType = type,
             OrderStatus = status,
-            UtcLastUpdateTimestamp = Ms(DateTime.UtcNow),
+            UtcLastUpdateTimestamp = Ms(Now),
         };
         if (stopPrice is { } sp) o.StopPrice = sp;
         if (positionId is { } pid) o.PositionId = pid;
@@ -324,7 +360,7 @@ public sealed class OpenApiServer
 
     private ProtoOADeal Deal(long orderId, long positionId, string symbol, int dir, long volume, double price, double commission)
     {
-        var now = Ms(DateTime.UtcNow);
+        var now = Ms(Now);
         return new ProtoOADeal
         {
             DealId = NextId(),
@@ -351,8 +387,26 @@ public sealed class OpenApiServer
         private readonly HashSet<long> _spots = [];
         private volatile bool _app;
         private volatile bool _account;
+        private readonly SemaphoreSlim _turnDone = new(0);
+        private bool _stepping;
 
         public bool AccountReady => _account;
+
+        public bool WaitTurn(TimeSpan timeout) => _turnDone.Wait(timeout);
+
+        /// <summary>The first call says this bot takes part; every later one that its turn is finished (spec §7.2).</summary>
+        private void TurnFinished()
+        {
+            if (_stepping)
+            {
+                _turnDone.Release();
+                return;
+            }
+            _stepping = true;
+            lock (server._lock)
+                server._steppers.Add(this);
+            server._log($"A bot joined the lock-step ({server.Steppers})");
+        }
 
         public bool Watches(long symbolId)
         {
@@ -422,6 +476,12 @@ public sealed class OpenApiServer
 
             switch (m)
             {
+                case ProtoOASymbolCategoryListReq r:
+                    Account(r.CtidTraderAccountId);
+                    var categories = new ProtoOASymbolCategoryListRes { CtidTraderAccountId = r.CtidTraderAccountId };
+                    if (server._lockStep)
+                        TurnFinished();
+                    return [categories];
                 case ProtoOAVersionReq:
                     return [new ProtoOAVersionRes { Version = Version }];
                 case ProtoOAGetAccountListByAccessTokenReq r:
@@ -503,6 +563,26 @@ public sealed class OpenApiServer
                     rec.Position.AddRange(server._broker.Positions().Select(server.PositionOf));
                     rec.Order.AddRange(server._broker.Orders().Select(o => server.PendingOrderOf(o, ProtoOAOrderStatus.OrderStatusAccepted)));
                     return [rec];
+                case ProtoOAGetPositionUnrealizedPnLReq r:
+                    Account(r.CtidTraderAccountId);
+                    var pnl = new ProtoOAGetPositionUnrealizedPnLRes { CtidTraderAccountId = r.CtidTraderAccountId, MoneyDigits = MoneyDigits };
+                    pnl.Positions.AddRange(server._broker.OpenResults().Select(x => new PositionUnrealizedPnL(x.Id, Money(x.Gross), Money(x.Net))));
+                    return [pnl];
+                case ProtoOAExpectedMarginReq r:
+                    Account(r.CtidTraderAccountId);
+                    var spec = server.SymbolOf(r.SymbolId) ?? throw new RequestException("SYMBOL_NOT_FOUND", $"Symbol {r.SymbolId} not found");
+                    var expected = new ProtoOAExpectedMarginRes { MoneyDigits = MoneyDigits };
+                    expected.Margin.AddRange(r.Volume.Select(v => new ProtoOAExpectedMargin
+                    {
+                        Volume = v, BuyMargin = Money(server._broker.ExpectedMargin(spec.Name, 1, v)), SellMargin = Money(server._broker.ExpectedMargin(spec.Name, -1, v)),
+                    }));
+                    return [expected];
+                case ProtoOAOrderListReq r:
+                    Account(r.CtidTraderAccountId);
+                    return [new ProtoOAOrderListRes { CtidTraderAccountId = r.CtidTraderAccountId, HasMore = false }]; // the run has no restarts to recover from
+                case ProtoOADealListReq r:
+                    Account(r.CtidTraderAccountId);
+                    return [new ProtoOADealListRes { CtidTraderAccountId = r.CtidTraderAccountId, HasMore = false }];
                 case ProtoOANewOrderReq r:
                     Account(r.CtidTraderAccountId);
                     return Trade(() => NewOrder(r));
@@ -545,7 +625,8 @@ public sealed class OpenApiServer
                     var price = stop ? (r.HasStopPrice ? r.StopPrice : throw new BrokerException("INVALID_REQUEST", "A stop order needs a stop price"))
                         : r.HasLimitPrice ? r.LimitPrice : throw new BrokerException("INVALID_REQUEST", "A limit order needs a limit price");
                     var (psl, ptp) = Protection(r, spec, dir, price, relativeOnly: false);
-                    server._broker.PlaceOrder(stop ? OrderType.Stop : OrderType.Limit, spec.Name, dir, r.Volume, price, psl, ptp, trailing, label, comment);
+                    DateTime? expires = server._lockStep && r.HasExpirationTimestamp ? DateTime.UnixEpoch.AddMilliseconds(r.ExpirationTimestamp) : null;
+                    server._broker.PlaceOrder(stop ? OrderType.Stop : OrderType.Limit, spec.Name, dir, r.Volume, price, psl, ptp, trailing, label, comment, expires);
                     break;
                 default:
                     throw new BrokerException("INVALID_REQUEST", $"Rewind accepts market, limit and stop orders, not {r.OrderType} (spec §10)");
@@ -599,13 +680,19 @@ public sealed class OpenApiServer
                 CtidTraderAccountId = Credentials.AccountId, Balance = Money(balance), DepositAssetId = AssetId("USD"),
                 AccessRights = ProtoOAAccessRights.FullAccess, AccountType = ProtoOAAccountType.Hedged, LeverageInCents = 50_000,
                 TraderLogin = Credentials.AccountId, BrokerName = "Rewind", MoneyDigits = MoneyDigits,
+                TotalMarginCalculationType = server._broker.Rules?.MarginMode switch
+                {
+                    "Max" => ProtoOATotalMarginCalculationType.Max,
+                    "Net" => ProtoOATotalMarginCalculationType.Net,
+                    _ => ProtoOATotalMarginCalculationType.Sum,
+                },
             };
         }
 
         /// <summary>Past candles (spec §6.1): the asked real-time window is moved to just before the replay cursor, and back.</summary>
         private ProtoOAGetTrendbarsRes Trendbars(ProtoOAGetTrendbarsReq r)
         {
-            var res = new ProtoOAGetTrendbarsRes { CtidTraderAccountId = r.CtidTraderAccountId, Period = r.Period, Timestamp = Ms(DateTime.UtcNow), SymbolId = r.SymbolId };
+            var res = new ProtoOAGetTrendbarsRes { CtidTraderAccountId = r.CtidTraderAccountId, Period = r.Period, Timestamp = Ms(server.Now), SymbolId = r.SymbolId };
             Timeframe? tf = r.Period switch
             {
                 ProtoOATrendbarPeriod.M5 => Timeframe.M5,
@@ -617,8 +704,8 @@ public sealed class OpenApiServer
             };
             if (tf is null || server.SymbolOf(r.SymbolId) is not { } spec || !server._history.TryGetValue(spec.Name, out var h))
                 return res;
-            var cursor = server._clock.State.CursorUtc;
-            var offset = TimeSpan.FromMinutes(Math.Round((cursor - DateTime.UtcNow).TotalMinutes));
+            var cursor = server._lockStep ? server.Now : server._clock.State.CursorUtc;
+            var offset = server._lockStep ? TimeSpan.Zero : TimeSpan.FromMinutes(Math.Round((cursor - DateTime.UtcNow).TotalMinutes));
             var from = DateTime.UnixEpoch.AddMilliseconds(r.FromTimestamp) + offset;
             var to = DateTime.UnixEpoch.AddMilliseconds(r.ToTimestamp) + offset;
             foreach (var c in Timeframes.Candles(h, tf.Value, cursor, to, 5000).Where(c => c.TimeUtc >= from))

@@ -128,7 +128,7 @@ public sealed partial class TmResults : IDisposable
             case EventKind.OrderPlaced or EventKind.OrderAmended when tm is { Role: "HMAIN" or "HMIR" } h:
                 HedgeOrder(h.MainId, h.Role, e.OrderId!.Value, e.Price);
                 break;
-            case EventKind.OrderFilled or EventKind.OrderCancelled when tm is { Role: "HMAIN" or "HMIR" } h:
+            case EventKind.OrderFilled or EventKind.OrderCancelled or EventKind.OrderRejected or EventKind.OrderExpired when tm is { Role: "HMAIN" or "HMIR" } h:
                 if (FindLeg(h.MainId, LegOf(h.Role)) is { } l1 && l1.HedgeOrderId == e.OrderId)
                     l1.HedgeOrderId = null;
                 break;

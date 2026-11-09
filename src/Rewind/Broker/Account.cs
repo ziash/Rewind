@@ -25,6 +25,10 @@ public sealed class Position
     public string Comment { get; set; } = "";
     /// <summary>Opening commission not yet booked against a closed part (USD).</summary>
     public double OpenCommission { get; set; }
+    /// <summary>Margin held, fixed at opening (whole-account run, spec §7.2).</summary>
+    public double Margin { get; set; }
+    /// <summary>Swap charged so far and already in the balance (+ = received), not yet reported with a closed part.</summary>
+    public double Swap { get; set; }
 
     public Position Copy() => (Position)MemberwiseClone();
 }
@@ -48,6 +52,8 @@ public sealed class PendingOrder
     public double? TakeProfit { get; set; }
     public bool Trailing { get; set; }
     public DateTime CreatedUtc { get; set; }
+    /// <summary>Server expiry, in replay time (whole-account run, spec §7.2).</summary>
+    public DateTime? ExpiresUtc { get; set; }
     public string Label { get; set; } = "";
     public string Comment { get; set; } = "";
 
@@ -70,9 +76,9 @@ public sealed class AccountState
 }
 
 /// <summary>Why a position (or part) closed: Manual = by the owner in the browser, Tm = over the Open API (by TM).</summary>
-public enum CloseReason { Manual, StopLoss, TakeProfit, Tm }
+public enum CloseReason { Manual, StopLoss, TakeProfit, Tm, StopOut }
 
-public enum EventKind { PositionOpened, PositionClosed, PositionReduced, ProtectionChanged, OrderPlaced, OrderAmended, OrderCancelled, OrderFilled }
+public enum EventKind { PositionOpened, PositionClosed, PositionReduced, ProtectionChanged, OrderPlaced, OrderAmended, OrderCancelled, OrderFilled, OrderRejected, OrderExpired }
 
 /// <summary>
 /// Something that happened on the account, at replay time (spec §5 messages, events.csv). For the Open API server
