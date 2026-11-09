@@ -5,7 +5,7 @@
 | Item | Value |
 |---|---|
 | Status | **Steps 1–8 built** (history downloader 20-Oct-2026; chart, simulated broker and TM connection 21-Oct-2026; exact mode, TM's results, pending orders and trailing stops 22-Oct-2026; `rewind-lab` for Scout Lens 08-Nov-2026; whole-account run 09-Nov-2026) — §11 |
-| Document version | v0.15 (09-Nov-2026) — history in §15 |
+| Document version | v0.16 (09-Nov-2026) — history in §15 |
 | Owner | Zeeshan |
 | Repository | [github.com/ziash/Rewind](https://github.com/ziash/Rewind) (public) — separate from [Trader](https://github.com/ziash/Trader) |
 | Runs on | The Ubuntu laptop, or Windows on the same machine (v0.9); browser GUI at `http://localhost:5180`; the broker side at `localhost:5036` |
@@ -212,7 +212,7 @@ rewind-lab candles  ──►  <SYMBOL>-H1/H4/D1.csv  ──►  Trader.Scout --
 
 ### 7.2 Whole-account run (step 8)
 
-For Trader's Phase 3 (independent review P-06; owner, 09-Nov-2026: use Rewind and a switch in the bots, no separate simulator). The real Scout and the real TM trade one simulated account over all symbols, as fast as they can answer. `rewind-lab run` starts it; nothing here changes the browser replay, which keeps its real-time behaviour of §6.
+For Trader's Phase 3 (independent review P-06; owner, 09-Nov-2026: use Rewind and a switch in the bots, no separate simulator). The real Scout and the real TM trade one simulated account over all symbols, as fast as they can answer. `rewind-lab run` starts it (`--from` and `--to` take a day, or a moment such as `2026-11-04T18:15`, to replay a stretch that really traded); nothing here changes the browser replay, which keeps its real-time behaviour of §6.
 
 | Part | How |
 |---|---|
@@ -375,3 +375,4 @@ Each step on the owner's go, each tested before the next.
 | v0.13 | 08 Nov 2026 | First full download of the 19 symbols: price factors of XNGUSD (10,000) and SOLUSD (100) corrected; SOLUSD ends 22-Aug-2026 in Dukascopy's feed (§13) |
 | v0.14 | 09 Nov 2026 | New §4.1 (owner): what was downloaded, for what, and the state of each symbol's files |
 | v0.15 | 09 Nov 2026 | Step 8 (owner, Trader's Phase 3): whole-account run (§7.2): one account over all symbols, lock-step turns with the real Scout and TM, margin by the broker's rule, refusals, stop-out, swap, order expiry |
+| v0.16 | 09 Nov 2026 | `rewind-lab run`: `--from` and `--to` take a moment in a day, to replay a stretch of real trading (Trader review P-06) |

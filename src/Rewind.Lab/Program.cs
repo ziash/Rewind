@@ -34,7 +34,7 @@ string[]? symbols = null;
 var files = new List<string>();
 DateTime? from = null, to = null;
 var (bots, port, balance, marginMode, stopOut) = (2, 5037, 5000.0, "Max", 50.0);
-static DateTime Day(string s) => DateTime.SpecifyKind(DateTime.ParseExact(s, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture), DateTimeKind.Utc);
+static DateTime Day(string s) => DateTime.SpecifyKind(DateTime.ParseExact(s, ["yyyy-MM-dd", "yyyy-MM-ddTHH:mm"], System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None), DateTimeKind.Utc); // a day, or a moment inside one (spec §7.2)
 if (args.Length == 0 || args[0] is "--help" or "-h")
 {
     Console.WriteLine(Usage);
