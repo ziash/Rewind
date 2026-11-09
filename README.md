@@ -8,7 +8,7 @@ A chart in the browser replays past prices: scroll back, go to any date, switch 
 |---|---|
 | Status | **Steps 1–6 built** — history downloader, chart, simulated broker with order panel and sessions, TM trading on it, exact mode and TM's results per leg, pending orders and trailing stops |
 | Specification | [docs/spec.md](docs/spec.md) — the single source of truth (goal, design, build steps, open questions, history) |
-| Price history | Dukascopy free data feed: 24 months, AUDJPY, EURGBP, EURUSD, GBPJPY, BTCUSD, ETHUSD, bid and ask; downloaded by Rewind's own tool |
+| Price history | Dukascopy free data feed: about 25 months, bid and ask, 19 symbols: Rewind's first six (replay and TM practice) and 13 more for Trader's Scout Lens; downloaded by Rewind's own tool. What is on disk, symbol by symbol: [spec §4.1](docs/spec.md) |
 | Runs on | Ubuntu or Windows, .NET 10; GUI at `http://localhost:5180` in the browser; broker side for TM at `localhost:5036` |
 | Data | `~/rewind/` (history, sessions, config) — outside the repo |
 | Related | [Trader](https://github.com/ziash/Trader) — the trading bots. Rewind shares no code with it (small pieces are copied) and changes nothing there except three opt-in settings (spec §9), done in Trader on the owner's go |

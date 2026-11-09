@@ -5,7 +5,7 @@
 | Item | Value |
 |---|---|
 | Status | **Steps 1–7 built** (history downloader 20-Oct-2026; chart, simulated broker and TM connection 21-Oct-2026; exact mode, TM's results, pending orders and trailing stops 22-Oct-2026; `rewind-lab` for Scout Lens 08-Nov-2026) — §11 |
-| Document version | v0.13 (08-Nov-2026) — history in §15 |
+| Document version | v0.14 (09-Nov-2026) — history in §15 |
 | Owner | Zeeshan |
 | Repository | [github.com/ziash/Rewind](https://github.com/ziash/Rewind) (public) — separate from [Trader](https://github.com/ziash/Trader) |
 | Runs on | The Ubuntu laptop, or Windows on the same machine (v0.9); browser GUI at `http://localhost:5180`; the broker side at `localhost:5036` |
@@ -71,9 +71,9 @@ Rewind's own downloader, **`rewind-download`** (a small C# console program in th
 | Source | Dukascopy data feed, one compressed file per symbol, side and day: `https://datafeed.dukascopy.com/datafeed/<SYMBOL>/<yyyy>/<MM-1>/<dd>/<BID\|ASK>_candles_min_1.bi5` — month counted from 00 (confirmed: `2026/09/12` is Monday 12-Oct-2026). HTTPS only (plain HTTP is redirected to it) |
 | Why M1 files | The feed offers 1-minute, 1-hour and 1-day candle files, not 5-minute ones; M5 and larger are built from M1. Keeping the M1 files costs nothing extra and allows a more exact replay later (§6.3) |
 | Format of a file | LZMA-compressed (the 7-Zip method, "lzma alone": 5 property bytes, 8 bytes size, data); inside, 1,440 records of 24 bytes, big-endian: seconds since 00:00 UTC, **open, close, low, high** (whole numbers = price × factor), volume (float). Decoded with the SharpCompress library (MIT licence, NuGet). Price factors: 100,000 (EURUSD, EURGBP), 1,000 (AUDJPY, GBPJPY), 10 (BTCUSD, ETHUSD) — checked against IC Markets' H1 candles of 14-Oct-2026: all six within 0.06 % |
-| Symbols | AUDJPY, EURGBP, EURUSD, GBPJPY, BTCUSD, ETHUSD (Dukascopy uses the same names). **v0.11, for Scout Lens (§7.1):** Scout's other symbols GBPUSD, USDJPY, EURJPY, XAUUSD, XAGUSD, XPTUSD, US500, USTEC, DE40, XTIUSD, XBRUSD, XNGUSD, SOLUSD; Dukascopy's names where they differ: XPTCMDUSD, USA500IDXUSD, USATECHIDXUSD, DEUIDXEUR, LIGHTCMDUSD, BRENTCMDUSD, GASCMDUSD (`src/Rewind.Download/Instruments.cs`). Price factor 1,000 for all but GBPUSD (100,000); checked against the brokers' prices of 6-Nov-2026 for EURJPY, XAUUSD, XAGUSD, XPTUSD, US500, DE40, XTIUSD — the others to be checked in the summary of the first full download (a wrong factor only needs `--build-only`, no new download). Saturdays are not downloaded except for crypto |
+| Symbols | AUDJPY, EURGBP, EURUSD, GBPJPY, BTCUSD, ETHUSD (Dukascopy uses the same names). **v0.11, for Scout Lens (§7.1):** Scout's other symbols GBPUSD, USDJPY, EURJPY, XAUUSD, XAGUSD, XPTUSD, US500, USTEC, DE40, XTIUSD, XBRUSD, XNGUSD, SOLUSD; Dukascopy's names where they differ: XPTCMDUSD, USA500IDXUSD, USATECHIDXUSD, DEUIDXEUR, LIGHTCMDUSD, BRENTCMDUSD, GASCMDUSD (`src/Rewind.Download/Instruments.cs`). Price factors and the state of each symbol: §4.1 (a wrong factor only needs `--build-only`, no new download). Saturdays are not downloaded except for crypto |
 | Period | 24 months back from the last complete day (first run: 1-Oct-2024 → 19-Oct-2026); re-running adds the missing days |
-| Amount | 8,120 files of about 11–15 KB (≈ 100 MB) for 1-Oct-2024 → 19-Oct-2026 |
+| Amount | 25,664 files of about 11–15 KB (≈ 313 MB) for 19 symbols, 1-Oct-2024 → 7-Nov-2026 (§4.1) |
 | Politeness | **One download at a time**, at least 1 s apart (about 2.3 s per file in practice → about 5 hours for the full history). Dukascopy answers "429 Too Many Requests" to bursts (seen while testing); then that file goes to the **end of the queue** and the next file is fetched, so one stubborn file never holds up the rest (v0.12); a file is tried up to 8 times, then left for a re-run. A single failure costs no wait; failures in a row mean the server itself is busy, so the downloader waits (the server's Retry-After, else 1 min, doubling up to 15 min) until a file comes through. Every file is kept in a raw cache (`~/rewind/history/raw/`), so a re-run never fetches a file twice and resumes after an interruption |
 | Clean-up | Minutes in which neither side traded (volume 0) are dropped; gaps are kept as gaps. A file whose records do not fit together (low above open/close, etc.) is refused and not kept |
 | Output | `~/rewind/history/<SYMBOL>/<yyyy-MM>.m1.csv.gz` (compressed) and `<yyyy-MM>.m5.csv` — one file per month |
@@ -85,6 +85,42 @@ Things to know:
 - Dukascopy's prices are **very close to, not identical with**, IC Markets' or Pepperstone's — fine for practising and for testing TM's behaviour. Their spreads also differ; Rewind can instead use **fixed spreads per symbol** (e.g. the medians the Audit Bot measured) — decision in §13.
 - **Personal use only:** the downloaded history is never committed to Git or shared (`.gitignore` excludes it) — the only exception is two EURUSD day files (22 KB) kept as test samples in this private repository. Dukascopy's own terms for the feed could not be found online yet (§13).
 - The download is the **only** time Rewind talks to the internet.
+
+### 4.1 History on disk (v0.14; download finished 08-Nov-2026)
+
+**Why these symbols.** Rewind's first six (20-Oct-2026) are for its own purpose: replaying the chart and practising with TM (§1). Thirteen more were added on 08-Nov-2026 for Trader's **Scout Lens** step 1, which needs every setup Scout would have traded on past candles, with its result in R (§7.1; Trader `docs/bots/scout/scout-lens.md` §8.1). Scout's 18 charts are those 13 plus five of the first six; EURGBP is not a Scout chart, and stays for Rewind and for its GBP → USD conversion (§7).
+
+**State.** 19 symbols, 1-Oct-2024 → 7-Nov-2026, bid and ask. 25,664 raw day files (about 313 MB in `~/rewind/history/raw/`), built into monthly CSV files (about 588 MB in `~/rewind/history/<SYMBOL>/`). Last run: 6,852 files, none given up, 134 moved to the end of the queue at least once (134 moves in all), all fetched in the end (log: `~/rewind/logs/download-20261108-1203.log`). Neither the files nor the CSVs are in this repository: the data stays private (§13).
+
+| Symbol | Dukascopy name | Price factor | Downloaded for | Raw files | Empty files | Data | Days with trading | 1-min candles | Price range |
+|---|---|---:|---|---:|---:|---|---:|---:|---|
+| AUDJPY | AUDJPY | 1,000 | Both: first six + Scout chart | 1,316 | 0 | 2024-10-01 → 2026-11-06 | 658 | 782,057 | 86.043 – 114.960 |
+| EURGBP | EURGBP | 100,000 | Rewind only: first six, GBP → USD conversion | 1,316 | 0 | 2024-10-01 → 2026-11-06 | 658 | 780,958 | 0.82198 – 0.88651 |
+| EURUSD | EURUSD | 100,000 | Both: first six + Scout chart | 1,316 | 0 | 2024-10-01 → 2026-11-06 | 658 | 782,385 | 1.01772 – 1.20822 |
+| GBPJPY | GBPJPY | 1,000 | Both: first six + Scout chart | 1,316 | 0 | 2024-10-01 → 2026-11-06 | 658 | 781,884 | 184.365 – 219.604 |
+| BTCUSD | BTCUSD | 10 | Both: first six + Scout chart | 1,536 | 0 | 2024-10-01 → 2026-11-07 | 768 | 1,100,659 | 57719.4 – 126262.6 |
+| ETHUSD | ETHUSD | 10 | Both: first six + Scout chart | 1,536 | 0 | 2024-10-01 → 2026-11-07 | 768 | 1,099,717 | 1382.6 – 4952.5 |
+| GBPUSD | GBPUSD | 100,000 | Scout Lens | 1,316 | 0 | 2024-10-01 → 2026-11-06 | 658 | 781,126 | 1.20992 – 1.38690 |
+| USDJPY | USDJPY | 1,000 | Scout Lens | 1,316 | 0 | 2024-10-01 → 2026-11-06 | 658 | 782,010 | 139.885 – 163.989 |
+| EURJPY | EURJPY | 1,000 | Scout Lens | 1,316 | 0 | 2024-10-01 → 2026-11-06 | 658 | 782,410 | 154.792 – 187.949 |
+| XAUUSD | XAUUSD | 1,000 | Scout Lens | 1,316 | 0 | 2024-10-01 → 2026-11-06 | 656 | 745,925 | 2536.664 – 5596.805 |
+| XAGUSD | XAGUSD | 1,000 | Scout Lens | 1,316 | 0 | 2024-10-01 → 2026-11-06 | 656 | 744,103 | 28.108 – 121.647 |
+| XPTUSD | XPTCMDUSD | 1,000 | Scout Lens | 1,316 | 0 | 2024-10-01 → 2026-11-06 | 655 | 740,835 | 878.169 – 2922.169 |
+| US500 | USA500IDXUSD | 1,000 | Scout Lens | 1,316 | 0 | 2024-10-01 → 2026-11-06 | 656 | 715,785 | 4805.763 – 7844.518 |
+| USTEC | USATECHIDXUSD | 1,000 | Scout Lens | 1,316 | 0 | 2024-10-01 → 2026-11-06 | 656 | 718,720 | 16324.253 – 31364.919 |
+| DE40 | DEUIDXEUR | 1,000 | Scout Lens | 1,316 | 0 | 2024-10-01 → 2026-11-06 | 656 | 711,581 | 18809.255 – 26690.499 |
+| XTIUSD | LIGHTCMDUSD | 1,000 | Scout Lens | 1,316 | 0 | 2024-10-01 → 2026-11-06 | 656 | 734,697 | 54.965 – 119.430 |
+| XBRUSD | BRENTCMDUSD | 1,000 | Scout Lens | 1,316 | 0 | 2024-10-01 → 2026-11-06 | 543 | 672,809 | 58.348 – 119.447 |
+| XNGUSD | GASCMDUSD | 10,000 | Scout Lens | 1,316 | 0 | 2024-10-01 → 2026-11-06 | 656 | 630,794 | 2.2132 – 5.6443 |
+| SOLUSD | SOLUSD | 100 | Scout Lens | 1,536 | 154 | 2024-10-01 → 2026-08-22 | 691 | 987,858 | 59.92 – 294.77 |
+
+Reading the table:
+
+- **Raw files** are two per day (bid, ask). Forex, metals, indices and energy have no Saturday files, so 1,316; 24/7 crypto has 1,536.
+- **Empty files** mean Dukascopy answered "not found": that day has no data, and a re-run does not ask again. Only SOLUSD has any: its 154 files are 23-Aug-2026 → 7-Nov-2026 (77 days × 2), so **SOLUSD's history ends on 22-Aug-2026**. Delete those files if Dukascopy brings the feed back, then re-run.
+- **Days with trading** can be below raw files ÷ 2: a file can hold no traded minute. XBRUSD has 543 because Brent has no Sunday session.
+- **Price factors:** the first six were checked against IC Markets' candles (within 0.06 %). The other 13 were checked for scale against broker prices of 6-Nov-2026: Dukascopy's prices are close to a broker's, not equal. XNGUSD (10,000) and SOLUSD (100) were corrected after the first full download (v0.13).
+- Later days are added by re-running `rewind-download`; nothing is refreshed on its own, so the data stays at 7-Nov-2026 until then.
 
 ## 5. The chart (browser GUI)
 
@@ -318,3 +354,4 @@ Each step on the owner's go, each tested before the next.
 | v0.11 | 08 Nov 2026 | Step 7 (owner, for Trader's Scout Lens): `rewind-lab` (§7.1) — `candles` exports 1H / 4H / daily candles for Scout's replay, `outcomes` plays Scout's orders on the simulated broker with Scout's rules (stop entry, stop-loss at the far side, trailing, one cancels the other, expiry, refusals) and gives each its result in R. Downloader: Scout's other symbols (§4; Dukascopy names where they differ, `FeedName`); approximate symbol details for them, EUR → USD for DE40 (§7). Fix: 4H candles of 24/7 symbols in the hour New York's clock repeats (§5) |
 | v0.12 | 08 Nov 2026 | Downloader (owner): a file Dukascopy does not give now goes to the end of the queue instead of holding up the download for up to an hour; polite waits only when failures come in a row (§4) |
 | v0.13 | 08 Nov 2026 | First full download of the 19 symbols: price factors of XNGUSD (10,000) and SOLUSD (100) corrected; SOLUSD ends 22-Aug-2026 in Dukascopy's feed (§13) |
+| v0.14 | 09 Nov 2026 | New §4.1 (owner): what was downloaded, for what, and the state of each symbol's files |
