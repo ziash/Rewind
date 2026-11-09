@@ -94,6 +94,8 @@ public sealed record BrokerEvent(DateTime TimeUtc, EventKind Kind, string Symbol
     public CloseReason? Reason { get; init; }
     public double Commission { get; init; }
     public double GrossProfit { get; init; }
+    /// <summary>Swap of the closed part, already in the balance (whole-account run, spec §7.2).</summary>
+    public double Swap { get; init; }
     public double Balance { get; init; }
 }
 

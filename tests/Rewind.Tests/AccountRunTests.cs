@@ -115,6 +115,11 @@ public sealed class AccountRunTests
         b.MarketOrder("EURUSD", 1, Lot, null, null);
         b.Walk(start.AddMinutes(5), start.AddMinutes(40), (_, _) => { });
         Assert.Equal(4980, b.Money().Balance, 2);
+        var closes = new List<BrokerEvent>();
+        b.Event += closes.Add;
+        b.ClosePosition(b.Positions()[0].Id, by: CloseReason.Tm);
+        Assert.Equal(-20, Assert.Single(closes).Swap, 2); // reported with the trade, and not charged twice
+        Assert.Equal(4980, b.Money().Balance, 2);
 
         var wednesday = new DateTime(2026, 7, 15, 20, 45, 0, DateTimeKind.Utc);
         var bars2 = Enumerable.Range(0, 8).Select(i => Flat(wednesday.AddMinutes(5 * i), 1.1));

@@ -211,7 +211,7 @@ public sealed partial class TmResults : IDisposable
             {
                 leg.ExitSum += e.Price * e.Volume;
                 leg.ClosedVolume += e.Volume;
-                leg.Gross += e.GrossProfit;
+                leg.Gross += e.GrossProfit + e.Swap;
                 leg.Commission += e.Commission;
                 if (e.Kind == EventKind.PositionClosed)
                 {
@@ -232,7 +232,7 @@ public sealed partial class TmResults : IDisposable
                 var gain = -leg.Dir * (e.Price - leg.HedgeFill);
                 leg.HedgesRealized += gain * e.Volume / leg.HedgeVolume;
                 leg.Raised = gain > 0; // closed at fill + 1 pip (armed): TM re-hedges 1R beyond the price first
-                leg.Gross += e.GrossProfit;
+                leg.Gross += e.GrossProfit + e.Swap;
                 leg.Commission += e.Commission;
                 if (e.Kind == EventKind.PositionClosed)
                     leg.HedgePositionId = null;

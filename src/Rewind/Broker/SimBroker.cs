@@ -626,7 +626,7 @@ public sealed class SimBroker : IMarket
         var what = reason switch { CloseReason.StopLoss => "stop-loss hit", CloseReason.TakeProfit => "take-profit hit", CloseReason.Tm => "closed by TM", CloseReason.StopOut => "stopped out", _ => "closed" };
         Record(new BrokerEvent(_now, all ? EventKind.PositionClosed : EventKind.PositionReduced, p.Symbol, p.Id, null, p.Dir, volume, price,
             $"{what}: {spec.Lots(volume):0.##} at {Fmt(spec, price)}, {pnl - openCommission - closeCommission:+0.00;-0.00} USD", p.Label)
-            { Position = p.Copy(), Reason = reason, Commission = closeCommission, GrossProfit = pnl, Balance = _account.Balance });
+            { Position = p.Copy(), Reason = reason, Commission = closeCommission, GrossProfit = pnl, Swap = swap, Balance = _account.Balance });
         _journal?.Trade(p, spec, volume, price, _now, reason, pnl + swap, openCommission + closeCommission);
     }
 
